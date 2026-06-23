@@ -385,6 +385,21 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Webhook de Hotmart: lo invoca un tercero (Hotmart), no nuestro cliente, así que no
+# llega un JWT de Supabase. La función se autentica por `hottok`. Sin esto, el runtime
+# rechazaría con 401 antes de llegar a nuestro código.
+[functions.hotmart-webhook]
+verify_jwt = false
+
+# bank-transfer-approval: la invoca el admin desde el navegador. verify_jwt = false a
+# nivel gateway NO es un agujero: el preflight OPTIONS que manda el navegador NO lleva
+# header Authorization, así que con verify_jwt = true el gateway lo rechazaría con 401
+# y rompería el CORS. La auth REAL (JWT validado contra GoTrue + rol = antawa_admin) se
+# hace DENTRO de la función, que es más fuerte (el gateway solo confirma "hay un JWT",
+# no que sea admin).
+[functions.bank-transfer-approval]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
