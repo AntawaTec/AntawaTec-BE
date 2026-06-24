@@ -400,6 +400,13 @@ verify_jwt = false
 [functions.bank-transfer-approval]
 verify_jwt = false
 
+# notification-dispatch: la invoca pg_cron (server-to-server, sin JWT de usuario).
+# La auth real es el header x-cron-secret == CRON_SECRET, validado DENTRO de la
+# función (mismo patrón que `hottok` en hotmart-webhook). En prod CRON_SECRET DEBE
+# estar seteado; en dev local sin secret la función permite invocación directa.
+[functions.notification-dispatch]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
