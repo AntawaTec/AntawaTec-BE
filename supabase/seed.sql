@@ -31,9 +31,10 @@
 do $$
 declare
   -- ===== Usuarios de auth =====
-  admin_uid uuid := 'ad000000-0000-4000-a000-000000000001';
-  owner_a   uuid := 'a0000000-0000-4000-a000-000000000001';
-  owner_b   uuid := 'b0000000-0000-4000-a000-000000000001';
+  admin_uid   uuid := 'ad000000-0000-4000-a000-000000000001';
+  owner_a     uuid := 'a0000000-0000-4000-a000-000000000001';
+  owner_b     uuid := 'b0000000-0000-4000-a000-000000000001';
+  tech_a1_uid uuid := 'a0000000-0000-4000-a000-0000000000c1'; -- login del técnico (→ technicians.profile_id de tech_a1)
 
   -- ===== Tenants =====
   shop_a uuid := 'a1000000-0000-4000-a000-000000000001';
@@ -92,8 +93,8 @@ begin
   -- delete-then-insert = idempotente. Durante db reset la tabla está vacía
   -- (el reset recrea el contenedor) → el delete es no-op; en un re-run via psql
   -- limpia las filas previas antes de reinsertar.
-  delete from auth.identities where user_id in (admin_uid, owner_a, owner_b);
-  delete from auth.users      where id      in (admin_uid, owner_a, owner_b);
+  delete from auth.identities where user_id in (admin_uid, owner_a, owner_b, tech_a1_uid);
+  delete from auth.users      where id      in (admin_uid, owner_a, owner_b, tech_a1_uid);
 
   insert into auth.users (
     instance_id, id, aud, role, email, encrypted_password,
@@ -112,7 +113,11 @@ begin
     (inst, owner_b, 'authenticated', 'authenticated', 'ownerb@antawa.test',
        crypt('ownerb-pass-123', gen_salt('bf')), now(), now(), now(),
        '{"provider":"email","providers":["email"]}'::jsonb,
-       '{"full_name":"Dueño Taller B"}'::jsonb, '', '', '', '');
+       '{"full_name":"Dueño Taller B"}'::jsonb, '', '', '', ''),
+    (inst, tech_a1_uid, 'authenticated', 'authenticated', 'techa@antawa.test',
+       crypt('techa-pass-123', gen_salt('bf')), now(), now(), now(),
+       '{"provider":"email","providers":["email"]}'::jsonb,
+       '{"full_name":"Juan Pérez (técnico)"}'::jsonb, '', '', '', '');
 
   insert into auth.identities (
     id, user_id, provider_id, identity_data, provider,
@@ -126,6 +131,9 @@ begin
        'email', now(), now(), now()),
     (gen_random_uuid(), owner_b, owner_b::text,
        jsonb_build_object('sub', owner_b::text, 'email', 'ownerb@antawa.test', 'email_verified', true),
+       'email', now(), now(), now()),
+    (gen_random_uuid(), tech_a1_uid, tech_a1_uid::text,
+       jsonb_build_object('sub', tech_a1_uid::text, 'email', 'techa@antawa.test', 'email_verified', true),
        'email', now(), now(), now());
 
   -- ---------- 2. Tenants ----------
@@ -136,9 +144,10 @@ begin
 
   -- ---------- 3. Profiles (enlazan usuarios ↔ rol/shop) ----------
   insert into public.profiles (id, shop_id, role, full_name) values
-    (admin_uid, null,   'antawa_admin', 'Admin Antawa'),
-    (owner_a,   shop_a, 'shop_owner',   'Dueño Taller A'),
-    (owner_b,   shop_b, 'shop_owner',   'Dueño Taller B')
+    (admin_uid,   null,   'antawa_admin', 'Admin Antawa'),
+    (owner_a,     shop_a, 'shop_owner',   'Dueño Taller A'),
+    (owner_b,     shop_b, 'shop_owner',   'Dueño Taller B'),
+    (tech_a1_uid, shop_a, 'technician',   'Juan Pérez (técnico)')
   on conflict do nothing;
 
   -- ---------- 4. Técnicos ----------
@@ -147,6 +156,11 @@ begin
     (tech_a2, shop_a, 'Pedro Gómez'),
     (tech_b1, shop_b, 'Carlos Ruiz')
   on conflict do nothing;
+
+  -- Enlace login↔técnico: tech_a1 inicia sesión (asignado a wo_a1 + wo_a3). tech_a2
+  -- queda como staff sin login (el default de V1) → así la rebanada prueba "técnico
+  -- con login ve solo SUS órdenes, no las de otro técnico del mismo taller".
+  update public.technicians set profile_id = tech_a1_uid where id = tech_a1;
 
   -- ---------- 5. Clientes ----------
   insert into public.customers (id, shop_id, name, is_fleet, fleet_name, whatsapp_number) values

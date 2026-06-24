@@ -40,6 +40,8 @@ OWNER_B_EMAIL=ownerb@antawa.test
 OWNER_B_PASSWORD=ownerb-pass-123
 ADMIN_EMAIL=admin@antawa.test
 ADMIN_PASSWORD=admin-pass-123
+TECH_A_EMAIL=techa@antawa.test
+TECH_A_PASSWORD=techa-pass-123
 ENV
 }
 
