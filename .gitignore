@@ -3,3 +3,6 @@
 
 # Stack de TEST local (rebanada real-JWT) — generado por seed-test.sh
 .env.integration
+
+# Env local de las Edge Functions (functions serve --env-file); versionamos solo el .example
+supabase/functions/.env

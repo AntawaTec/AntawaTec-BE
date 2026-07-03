@@ -1,0 +1,60 @@
+<!--
+  invite.html — template del email de invitación (Dashboard: Auth → Email
+  Templates → "Invite user"; local: config.toml [auth.email.template.invite]).
+
+  El link usa {{ .TokenHash }} + verifyOtp en el /auth/callback del FE, NO el
+  {{ .ConfirmationURL }} stock: el link stock entrega tokens en el fragment de
+  la URL (invisible para un route handler) y PKCE exige el verifier cookie del
+  browser que pidió el link, que el invitado no tiene. Con token_hash el
+  invitado aterriza logueado en su taller desde cualquier navegador.
+-->
+<html>
+  <body style="margin:0;padding:0;background-color:#f4f5f7;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7;padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background-color:#ffffff;border-radius:12px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+            <tr>
+              <td style="background-color:#0e1822;padding:24px 32px;">
+                <span style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:0.5px;">Antawa<span style="color:#e30613;">Tec</span></span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;">
+                <h1 style="margin:0 0 12px;color:#0e1822;font-size:22px;line-height:1.3;">Tu taller en AntawaTec está listo</h1>
+                <p style="margin:0 0 24px;color:#4b5563;font-size:15px;line-height:1.6;">
+                  Un solo clic. Sin contraseñas. Tu cuenta te espera, lista para tu primer cliente.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+                  <tr>
+                    <td style="background-color:#e30613;border-radius:8px;">
+                      <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite"
+                         style="display:inline-block;padding:12px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
+                        Entrar a mi taller →
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 8px;color:#6b7280;font-size:13px;line-height:1.6;">
+                  Si el botón no funciona, copia y pega este enlace en tu navegador:
+                </p>
+                <p style="margin:0;word-break:break-all;">
+                  <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite"
+                     style="color:#0e1822;font-size:12px;">{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite</a>
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 32px;border-top:1px solid #e5e7eb;">
+                <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.6;">
+                  Antawa S.A.S. · Gestión de talleres mecánicos en Ecuador<br />
+                  Si no esperabas este correo, puedes ignorarlo.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

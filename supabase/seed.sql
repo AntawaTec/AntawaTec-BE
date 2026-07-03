@@ -87,6 +87,9 @@ declare
   mov_a3 uuid := 'ae000000-0000-4000-a000-000000000003';
   mov_a4 uuid := 'ae000000-0000-4000-a000-000000000004';
 
+  -- ===== Funnel bancario =====
+  proof_pend uuid := 'af000000-0000-4000-a000-000000000001';
+
   inst uuid := '00000000-0000-0000-0000-000000000000';
 begin
   -- ---------- 1. Usuarios de auth (con password) + identities ----------
@@ -253,6 +256,14 @@ begin
   insert into public.subscriptions (shop_id, provider, status, plan, current_period_end) values
     (shop_a, 'hotmart',       'active', 'standard', now() + interval '30 days'),
     (shop_b, 'bank_transfer', 'active', 'standard', now() + interval '30 days')
+  on conflict do nothing;
+
+  -- ---------- 14. Comprobante bancario pendiente (funnel de intake) ----------
+  -- Da datos a la UI admin en dev y ejercita el caso "sin archivo adjunto":
+  -- proof_url NULL → "Ver comprobante" deshabilitado en el FE. A propósito NO
+  -- se seedea objeto en storage.
+  insert into public.bank_transfer_proofs (id, business_name, email, amount, proof_url, status) values
+    (proof_pend, 'Taller Prospecto Seed', 'prospecto@antawa.test', 20.00, null, 'pending')
   on conflict do nothing;
 
   raise notice 'Seed determinista OK. Taller A = %, Taller B = %', shop_a, shop_b;

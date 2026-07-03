@@ -32,6 +32,8 @@ export const preflight = (): Response =>
 
 export const ok = (body: unknown = { ok: true }): Response => json(200, body);
 
+export const created = (body: unknown): Response => json(201, body);
+
 export const badRequest = (message: string): Response =>
   json(400, { error: message });
 
@@ -46,6 +48,9 @@ export const notFound = (message: string): Response =>
 
 export const methodNotAllowed = (message = "Método no permitido"): Response =>
   json(405, { error: message });
+
+export const tooManyRequests = (message: string): Response =>
+  json(429, { error: message });
 
 export const serverError = (message: string): Response =>
   json(500, { error: message });
