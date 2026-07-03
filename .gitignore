@@ -1,0 +1,5 @@
+# OS junk
+.DS_Store
+
+# Stack de TEST local (rebanada real-JWT) — generado por seed-test.sh
+.env.integration

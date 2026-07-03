@@ -1,6 +1,7 @@
 -- =============================================================================
 -- test_isolation.sql — Prove tenant isolation works under RLS.
--- Paste the same 3 UIDs from seed.sql. RUN EACH BLOCK SEPARATELY:
+-- UIDs FIJOS del seed determinista (supabase/seed.sql) — ya no hay que pegar nada.
+-- RUN EACH BLOCK SEPARATELY:
 -- highlight one block and press Run (the editor only shows the last result).
 -- Each block impersonates a user (set role authenticated + JWT claim) inside a
 -- transaction, then rolls back so nothing changes.
@@ -17,7 +18,7 @@
 --         my_role = 'shop_owner', my_shop_id = (Taller A's id)
 begin;
   set local role authenticated;
-  set local request.jwt.claims = '{"sub":"PASTE-OWNER-A-UID","role":"authenticated"}';
+  set local request.jwt.claims = '{"sub":"a0000000-0000-4000-a000-000000000001","role":"authenticated"}';
   select
     (select string_agg(name, ', ' order by name) from public.shops)     as shops_visible,
     (select count(*) from public.customers)                             as customers_visible,
@@ -32,7 +33,7 @@ rollback;
 --         my_role = 'shop_owner'. Owner B must NEVER see Taller A data.
 begin;
   set local role authenticated;
-  set local request.jwt.claims = '{"sub":"PASTE-OWNER-B-UID","role":"authenticated"}';
+  set local request.jwt.claims = '{"sub":"b0000000-0000-4000-a000-000000000001","role":"authenticated"}';
   select
     (select string_agg(name, ', ' order by name) from public.shops)     as shops_visible,
     (select count(*) from public.customers)                             as customers_visible,
@@ -47,7 +48,7 @@ rollback;
 --         work_orders = 4, my_shop_id = NULL, my_role = 'antawa_admin'.
 begin;
   set local role authenticated;
-  set local request.jwt.claims = '{"sub":"PASTE-ADMIN-UID","role":"authenticated"}';
+  set local request.jwt.claims = '{"sub":"ad000000-0000-4000-a000-000000000001","role":"authenticated"}';
   select
     (select string_agg(name, ', ' order by name) from public.shops)     as shops_visible,
     (select count(*) from public.customers)                             as customers_visible,
@@ -62,7 +63,7 @@ rollback;
 --         Bujía = 5 with below_threshold = true. (View must respect RLS.)
 begin;
   set local role authenticated;
-  set local request.jwt.claims = '{"sub":"PASTE-OWNER-A-UID","role":"authenticated"}';
+  set local request.jwt.claims = '{"sub":"a0000000-0000-4000-a000-000000000001","role":"authenticated"}';
   select product_name, current_stock, threshold, below_threshold
   from public.v_product_stock
   order by product_name;

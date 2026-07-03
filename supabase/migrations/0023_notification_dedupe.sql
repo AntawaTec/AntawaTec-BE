@@ -1,0 +1,21 @@
+-- =============================================================================
+-- 0023_notification_dedupe.sql
+-- Índice único parcial para el ENCOLADO idempotente de notificaciones.
+--
+-- El pipeline (RUNBOOK 3.8) encola por BARRIDO state-driven desde la edge function
+-- `notification-dispatch`: cada tick busca eventos del ciclo de vida sin su fila de
+-- notificación y la inserta 'queued'. Este índice garantiza UNA notificación por
+-- (entidad, plantilla) — un insert repetido del barrido choca y se ignora
+-- (ON CONFLICT DO NOTHING), así el barrido es seguro de correr una y otra vez.
+--
+-- Por qué barrido y no trigger: la regla del BE dice que el disparo de
+-- notificaciones va en Edge/app, no en triggers (CLAUDE.md + 0006/0007). El
+-- barrido vive en la edge function (state-driven → no se puede saltear un evento,
+-- la mitad "durable, no fire-and-forget" de la regla, sin trigger). Decidido vía
+-- debate dual-Opus.
+-- =============================================================================
+-- No-parcial: ON CONFLICT (cols) del upsert no puede inferir un índice parcial.
+-- Seguro igual: filas con related_entity_id NULL se tratan como distintas (NULLs
+-- distintos por default), y el barrido siempre encola con entity_id presente.
+create unique index notification_log_event_unique
+  on public.notification_log (related_entity_type, related_entity_id, template);
