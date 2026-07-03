@@ -39,12 +39,15 @@ const BUCKET = "payment-proofs";
 const MAX_FILE_BYTES = 5_242_880;
 
 // Extensión derivada del MIME (no del filename, que lo controla el cliente).
-const MIME_EXT: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "application/pdf": "pdf",
-};
+// Map y no objeto literal: el lookup en un objeto alcanzaría la cadena de
+// prototipos (p. ej. un Content-Type "constructor" daría truthy) y burlaría la
+// whitelist.
+const MIME_EXT = new Map<string, string>([
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+  ["application/pdf", "pdf"],
+]);
 
 const MAX_PENDING_PER_EMAIL = 3;
 const MAX_BUSINESS_NAME = 120;
@@ -62,6 +65,15 @@ Deno.serve(async (req) => {
   } catch (e) {
     console.error("bank-transfer-intake: configuración incompleta:", e);
     return serverError("Configuración del servidor incompleta.");
+  }
+
+  // Precheck barato ANTES de bufferizar el multipart: los browsers y curl
+  // siempre mandan Content-Length con FormData. 6 MB = 5 MB de archivo + campos
+  // y boundaries. Si falta el header (chunked), req.formData() y los límites
+  // del runtime siguen siendo la defensa.
+  const contentLength = Number(req.headers.get("content-length") ?? "0");
+  if (contentLength > MAX_FILE_BYTES + 1_048_576) {
+    return badRequest("El comprobante supera el máximo de 5 MB.");
   }
 
   let form: FormData;
@@ -112,7 +124,7 @@ Deno.serve(async (req) => {
   if (file.size > MAX_FILE_BYTES) {
     return badRequest("El comprobante supera el máximo de 5 MB.");
   }
-  const ext = MIME_EXT[file.type];
+  const ext = MIME_EXT.get(file.type);
   if (!ext) {
     return badRequest("Formato no soportado: se acepta JPG, PNG, WebP o PDF.");
   }
