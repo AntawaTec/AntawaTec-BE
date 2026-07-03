@@ -253,6 +253,15 @@ otp_expiry = 3600
 subject = "Tu taller en AntawaTec está listo"
 content_path = "./supabase/templates/invite.html"
 
+# Template custom del magic link (login normal sin contraseña). Misma marca que el
+# invite y mismo patrón de link: {{ .TokenHash }} + verifyOtp en /auth/callback
+# (type=magiclink), no el ConfirmationURL/PKCE stock → funciona en cualquier
+# navegador. En HOSTED se replica a mano en Dashboard → Auth → Email Templates →
+# "Magic Link" (paso manual del deploy, junto al del invite).
+[auth.email.template.magic_link]
+subject = "Tu enlace de acceso a AntawaTec"
+content_path = "./supabase/templates/magic_link.html"
+
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
 # enabled = true
