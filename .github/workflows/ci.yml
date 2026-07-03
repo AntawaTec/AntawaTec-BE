@@ -1,0 +1,64 @@
+name: CI
+
+# Piso de CI del backend (antes no había ninguno). Dos gates independientes en cada PR y
+# en push a main:
+#   1) migraciones — aplican limpio sobre una DB fresca (`supabase db reset`).
+#   2) functions   — las Edge Functions type-checkean en Deno (`deno check`).
+# Marcar ambos jobs como *required* en branch protection (Settings → Branches).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Un push nuevo cancela el run anterior del mismo ref (ahorra minutos).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  migrations:
+    name: migraciones aplican (db reset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pineado a la versión local verificada, igual que el nightly del FE: un bump de la
+      # CLI es un cambio deliberado, no una sorpresa.
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.102.0
+
+      # Docker viene preinstalado en ubuntu-latest. El primer `supabase start` tarda ~5 min
+      # bajando imágenes.
+      - name: Start local stack
+        run: supabase start
+
+      # `db reset` aplica TODAS las migraciones (0001–00NN) + seed.sql sobre una DB fresca:
+      # si una migración está rota o desordenada, esto se cae. Es el gate que evita empujar
+      # una migración mala a un proyecto hosteado. NO reusamos scripts/seed-test.sh porque
+      # ese asume el FE como repo hermano (copia .env.integration a ../AntawaTec-FE).
+      - name: Apply migrations + seed on a fresh DB
+        run: supabase db reset
+
+  functions:
+    name: edge functions type-check (deno)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # Nada type-checkea las functions hoy (no entran al tsc del FE). `deno check` sigue los
+      # imports relativos ../_shared/*.ts y resuelve npm:@supabase/supabase-js@2. Chequear los
+      # 4 entrypoints cubre transitivamente todo _shared.
+      - name: Type-check functions
+        run: deno check supabase/functions/*/index.ts
