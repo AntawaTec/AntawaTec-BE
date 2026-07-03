@@ -400,6 +400,13 @@ verify_jwt = false
 [functions.bank-transfer-approval]
 verify_jwt = false
 
+# bank-transfer-intake: la invoca un PROSPECTO ANÓNIMO desde la landing estática (no
+# hay JWT posible: el usuario todavía no existe). verify_jwt = false; la defensa es
+# validación estricta in-code (multipart, mime/size whitelist, honeypot, cap de
+# pendientes por email) y que el service_role nunca sale de la función.
+[functions.bank-transfer-intake]
+verify_jwt = false
+
 # notification-dispatch: la invoca pg_cron (server-to-server, sin JWT de usuario).
 # La auth real es el header x-cron-secret == CRON_SECRET, validado DENTRO de la
 # función (mismo patrón que `hottok` en hotmart-webhook). En prod CRON_SECRET DEBE
