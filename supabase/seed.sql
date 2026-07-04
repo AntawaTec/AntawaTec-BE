@@ -28,6 +28,11 @@
 -- atributos de negocio. Los UUIDs fijos son una conveniencia interna del BE.
 -- =============================================================================
 
+-- pgcrypto (crypt/gen_salt) vive en el schema `extensions` en Supabase hosted;
+-- localmente ya está en el search_path, en hosted no → lo exponemos para que el
+-- DO block resuelva crypt()/gen_salt() al sembrar los passwords.
+set search_path = public, extensions;
+
 do $$
 declare
   -- ===== Usuarios de auth =====
