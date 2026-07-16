@@ -98,10 +98,15 @@ Decisiones de modelado clave:
 - `customers.is_fleet` (+`fleet_name`) colapsa Flota/Empresa (corrige la colisión de Zoho).
 - `vehicles.fuel_type` corrige el `tipo_vehiculo` mal etiquetado de Zoho.
 - Inventario unificado: `products` / `services` / `inventory_movements` / `suppliers`.
-- `technicians` = staff del taller, **no usuarios de auth** en V1.
+- `technicians` = staff del taller, con **login opcional** vía `technicians.profile_id`
+  (`0021`; nullable, unique parcial). El alta/revocación del login la hace la Edge
+  Function `technician-access` (service_role); revocar = `deleteUser` → cascada borra
+  el profile y el FK deja `profile_id` NULL (el historial queda, referencia `technicians.id`).
 - `work_order_deliveries` 1:1 con la orden (cierre).
 - `quote_items` apunta a `product_id` **o** `service_id` (nunca ambos).
-- Roles: `antawa_admin` (sin shop) y `shop_owner` (un shop).
+- Roles: `antawa_admin` (sin shop), `shop_owner` (un shop) y `technician` (miembro de un
+  shop; `0020`–`0022`: deny-by-default — `current_shop_id()` → NULL — más grants aditivos
+  sobre SUS órdenes asignadas, bitácora/fotos, embeds y su fila de `technicians`).
 
 Agregados lote 1–2 (`0012`–`0019`, 2026-06): `quotes.quote_number` (correlativo por taller,
 ver log) + tabla interna `private.shop_quote_counters`; `shops.logo_url`/`address`;
@@ -165,6 +170,9 @@ con cola de reintento; todo queda en `notification_log`. Sin chatbot en V1 (solo
 - Una responsabilidad por función; utilidades compartidas en `_shared/`.
 - Funciones planeadas: `hotmart-webhook`, `bank-transfer-approval`, `provision-tenant`,
   `whatsapp-dispatch`, `notification-retry`, `appointment-reminders`.
+- `technician-access`: alta (invite por email / contraseña temporal) y revocación del
+  login de un técnico, invocada por el owner desde la PWA. Auth in-code (JWT + rol
+  shop_owner + tenancy del técnico); re-entrante con marker en `user_metadata`.
 - Secretos con `Deno.env.get(...)`; nunca hardcodear.
 - Webhooks y provisioning **idempotentes**. Códigos HTTP y errores consistentes.
 
@@ -222,6 +230,15 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   tenancy (RLS no valida que un FK apunte al mismo taller). Backstop 1:1 cita↔cotización
   (`appointments.quote_id` unique parcial) aislado en `0019` por ser el único cambio con riesgo
   de datos; verificado 0 duplicados en remoto antes de aplicar.
+- `[2026-07]` `technician-access`: revocar el login es `auth.admin.deleteUser`, **no ban** —
+  el esquema ya estaba diseñado para eso (cascada auth.users→profiles; `technicians.profile_id`
+  on delete set null; los `created_by` set null). Con delete la RLS deniega al instante aunque
+  el JWT viva (~1h): sin profile, `current_technician_id()` → NULL; un ban deja el JWT vivo
+  pasando RLS hasta expirar. Alta re-entrante estilo provisionTenant: el user nace con marker
+  `user_metadata {invited_as, technician_id, shop_id}`; un retry adopta huérfanos CON marker y
+  jamás cuentas sin él (no secuestrar owners del funnel). Sin migración: todo corre con
+  service_role sobre el esquema de `0020`–`0022`. El template de invite pasó a copy neutro
+  (lo comparten dueño y técnico); replicarlo a mano en el Dashboard hosted al deployar.
 
 ## Qué evitar
 - No editar migraciones ya aplicadas.
