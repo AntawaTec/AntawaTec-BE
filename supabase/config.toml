@@ -249,8 +249,11 @@ otp_expiry = 3600
 # {{ .TokenHash }} contra el /auth/callback del FE (verifyOtp), no el
 # ConfirmationURL stock. En HOSTED este template se replica a mano en
 # Dashboard → Auth → Email Templates → "Invite user" (paso manual del deploy).
+# El subject/copy son NEUTROS a propósito: GoTrue tiene UN solo template de
+# invite y lo comparten el onboarding del dueño (provisioning) y el alta de
+# técnicos (technician-access).
 [auth.email.template.invite]
-subject = "Tu taller en AntawaTec está listo"
+subject = "Tu acceso a AntawaTec está listo"
 content_path = "./supabase/templates/invite.html"
 
 # Template custom del magic link (login normal sin contraseña). Misma marca que el
@@ -419,6 +422,14 @@ verify_jwt = false
 # validación estricta in-code (multipart, mime/size whitelist, honeypot, cap de
 # pendientes por email) y que el service_role nunca sale de la función.
 [functions.bank-transfer-intake]
+verify_jwt = false
+
+# technician-access: la invoca el DUEÑO del taller desde el navegador (alta y
+# revocación del login de un técnico). verify_jwt = false por el mismo racional
+# que bank-transfer-approval: el preflight OPTIONS del navegador no lleva
+# Authorization y con verify_jwt = true moriría con 401 antes del CORS. La auth
+# real (JWT contra GoTrue + rol shop_owner + tenancy del técnico) va DENTRO.
+[functions.technician-access]
 verify_jwt = false
 
 # notification-dispatch: la invoca pg_cron (server-to-server, sin JWT de usuario).
