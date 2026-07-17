@@ -230,6 +230,11 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   tenancy (RLS no valida que un FK apunte al mismo taller). Backstop 1:1 cita↔cotización
   (`appointments.quote_id` unique parcial) aislado en `0019` por ser el único cambio con riesgo
   de datos; verificado 0 duplicados en remoto antes de aplicar.
+- `[2026-07]` Storage + `upsert: true` = `INSERT ... ON CONFLICT DO UPDATE`, y Postgres exige
+  que la fila sea visible por una política **SELECT** — falla con violación de RLS AUNQUE no
+  haya conflicto. `shop-logos` (0014, políticas separadas sin SELECT por ser bucket público)
+  rompía TODOS los uploads de logo; `0028` agrega el SELECT scoped. Lección: toda política de
+  escritura de storage que reciba upserts necesita su SELECT (o usar FOR ALL, como vehicle-media).
 - `[2026-07]` `technician-access`: revocar el login es `auth.admin.deleteUser`, **no ban** —
   el esquema ya estaba diseñado para eso (cascada auth.users→profiles; `technicians.profile_id`
   on delete set null; los `created_by` set null). Con delete la RLS deniega al instante aunque
