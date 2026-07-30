@@ -9,6 +9,7 @@
 // (ver notificationTemplates.ts), así que el swap es solo el cuerpo de este fetch.
 // =============================================================================
 import type { RenderedNotification } from "./notificationTemplates.ts";
+import { toWhatsAppMsisdn } from "./phone.ts";
 
 export interface SendResult {
   ok: boolean;
@@ -30,8 +31,16 @@ export async function sendWhatsApp(
 ): Promise<SendResult> {
   if (!to) return { ok: false, dryRun: isDryRun(), error: "cliente sin whatsapp_number" };
 
+  // Normalizamos ANTES de la rama dry-run a propósito: así la corrida de sandbox
+  // que absorbe el backlog histórico deja los números impresentables marcados
+  // 'failed' con un error legible, y sirve de auditoría previa al encendido.
+  const msisdn = toWhatsAppMsisdn(to);
+  if (!msisdn) {
+    return { ok: false, dryRun: isDryRun(), error: `whatsapp_number no normalizable: ${to}` };
+  }
+
   if (isDryRun()) {
-    console.log(`[whatsapp:dry-run] → ${to} [${template}] ${rendered.text}`);
+    console.log(`[whatsapp:dry-run] → ${msisdn} [${template}] ${rendered.text}`);
     return { ok: true, dryRun: true };
   }
 
@@ -44,7 +53,7 @@ export async function sendWhatsApp(
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
         messaging_product: "whatsapp",
-        to,
+        to: msisdn,
         type: "template",
         template: {
           name: template, // la plantilla registrada en Meta lleva el mismo nombre del enum
