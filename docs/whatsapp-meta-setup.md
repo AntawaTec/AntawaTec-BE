@@ -17,7 +17,11 @@
 | Cron (pg_cron + pg_net) | ✅ migración `0024` (no-op hasta configurar URL/secret) |
 | Normalización de números a MSISDN (`_shared/phone.ts`) | ✅ construido (2026-07-30) |
 | Acceso de Matias al portfolio "Antawa Tec" | ✅ invitación aceptada 2026-07-30 |
-| **Aprobación de Meta (Business Verification + WABA + plantillas)** | ⛔ **pendiente — sin inventariar** |
+| WABA + número registrado (`+593 98 392 6448`, Phone ID `1064755926716530`) | ✅ conectado, calidad Alta |
+| Las 6 plantillas | 🟡 creadas 2026-07-30, **en revisión** por Meta |
+| **Método de pago en la WABA `1644478160040571`** | ⛔ **falta — bloquea el envío business-initiated** |
+| **Verificación del negocio** | ⛔ pendiente (cap 250 conv/día, máx 2 números) |
+| Publicar la app `1003852111528931` (sale de modo desarrollo) | ⛔ pendiente |
 | Envío REAL (token + Phone Number ID) | ⛔ pendiente de lo anterior |
 
 ---
@@ -64,14 +68,27 @@ variables como **parámetros posicionales de body** (`components[].body`). El or
 `{{1}}, {{2}}, {{3}}` lo fija `renderTemplate()` en
 `supabase/functions/_shared/notificationTemplates.ts` (campo `components`).
 
+> ### Dos reglas de Meta que condicionan la redacción
+> Descubiertas al registrar las plantillas el **2026-07-30** — el contrato original
+> las violaba y **no era registrable**:
+> 1. Una plantilla **no puede empezar con variable** → de ahí el prefijo `Hola `.
+> 2. Tampoco puede **terminar con variable**, y un punto final **no alcanza**: hace
+>    falta texto real después → de ahí `Te esperamos.` y `¡Gracias por confiar en nosotros!`.
+
 | Nombre (exacto) | Texto (body) | `{{1}}` | `{{2}}` | `{{3}}` |
 |---|---|---|---|---|
-| `appointment_confirmed` | `{{1}}, tu cita para {{2}} quedó confirmada para el {{3}}.` | cliente | vehículo | fecha/hora |
-| `appointment_reminder_24h` | `{{1}}, te recordamos tu cita para {{2}} mañana, {{3}}.` | cliente | vehículo | fecha/hora |
-| `vehicle_received` | `{{1}}, recibimos {{2}} en el taller. Te avisamos cuando esté listo.` | cliente | vehículo | — |
-| `vehicle_ready` | `{{1}}, {{2}} ya está listo para retirar.` | cliente | vehículo | — |
-| `delivery_completed` | `{{1}}, gracias por confiar en nosotros. Entregamos {{2}}. Resumen: {{3}}.` | cliente | vehículo | resumen |
-| `quote_ready` | `{{1}}, la cotización para {{2}} está lista para tu revisión.` | cliente | vehículo | — |
+| `appointment_confirmed` | `Hola {{1}}, tu cita para {{2}} quedó confirmada para el {{3}}. Te esperamos.` | cliente | vehículo | fecha/hora |
+| `appointment_reminder_24h` | `Hola {{1}}, te recordamos tu cita para {{2}} mañana {{3}}. Te esperamos.` | cliente | vehículo | fecha/hora |
+| `vehicle_received` | `Hola {{1}}, recibimos {{2}} en el taller. Te avisamos cuando esté listo.` | cliente | vehículo | — |
+| `vehicle_ready` | `Hola {{1}}, {{2}} ya está listo para retirar.` | cliente | vehículo | — |
+| `delivery_completed` | `Hola {{1}}, entregamos {{2}}. Resumen del servicio: {{3}}. ¡Gracias por confiar en nosotros!` | cliente | vehículo | resumen |
+| `quote_ready` | `Hola {{1}}, la cotización para {{2}} está lista para tu revisión.` | cliente | vehículo | — |
+
+**Registradas el 2026-07-30** en la WABA `1644478160040571`, idioma **Spanish (`es`)**,
+categoría **Servicio (Utility)** — todas en estado *En revisión*.
+⚠️ `vehicle_received` quedó por error en categoría **Marketing**; no se puede corregir ni
+borrar mientras esté en revisión. Al aprobarse: verificar la categoría y, si sigue en
+Marketing, cambiarla a Servicio (Meta suele recategorizar solo los textos transaccionales).
 
 > Nota: `quote_ready` tiene su render listo pero **aún no se dispara** (el evento
 > "enviar cotización al cliente" no existe todavía en el producto). Registrar la
