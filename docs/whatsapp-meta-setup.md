@@ -15,7 +15,9 @@
 | Drenado + reintentos + render de plantillas | ✅ construido + verificado |
 | Envío en dry-run (sandbox, no llama a Meta) | ✅ por defecto (`WHATSAPP_DRY_RUN=true`) |
 | Cron (pg_cron + pg_net) | ✅ migración `0024` (no-op hasta configurar URL/secret) |
-| **Aprobación de Meta (Business Verification + WABA + plantillas)** | ⛔ **pendiente — lo inicia Antawa (Pablo)** |
+| Normalización de números a MSISDN (`_shared/phone.ts`) | ✅ construido (2026-07-30) |
+| Acceso de Matias al portfolio "Antawa Tec" | ✅ invitación aceptada 2026-07-30 |
+| **Aprobación de Meta (Business Verification + WABA + plantillas)** | ⛔ **pendiente — sin inventariar** |
 | Envío REAL (token + Phone Number ID) | ⛔ pendiente de lo anterior |
 
 ---
@@ -81,6 +83,35 @@ Si se cambia el texto de una plantilla en Meta, hay que reflejarlo en
 ---
 
 ## Parte del dev — encender (cuando lleguen las credenciales)
+
+> ### ⚠️ Paso 0 OBLIGATORIO: absorber el backlog en dry-run
+>
+> `sweep()` es **state-driven sin ventana temporal**: encola `vehicle_received` para
+> *toda* orden que exista, `vehicle_ready` para toda orden en `delivery`/`historical`,
+> `delivery_completed` para toda `historical` y `appointment_confirmed` para toda cita
+> con `source='quote'`. Si se prende el envío real con `notification_log` vacío, el
+> primer tick le manda a clientes reales una notificación por cada evento histórico.
+>
+> Medido en prod el **2026-07-30**: `notification_log` = 0 filas y el backlog daba
+> **49 mensajes** (23 + 10 + 8 + 8) sobre 18 clientes.
+>
+> **Antes** de tocar `WHATSAPP_DRY_RUN`, con el flag todavía en `true`, invocar
+> `notification-dispatch` a mano y repetir hasta que devuelva `enqueued: 0, sent: 0`
+> (el drenado va de a `DRAIN_LIMIT=100`). Eso marca el histórico como `sent` con
+> `dry_run:true`, y el índice único de `0023` impide que se vuelva a encolar: al
+> encender solo salen los eventos **nuevos**.
+>
+> Aprovechar esa corrida para revisar las filas `failed` — son los números que
+> `toWhatsAppMsisdn()` no pudo normalizar (ver abajo) y hay que corregir a mano.
+
+### Números de teléfono
+
+`_shared/phone.ts` normaliza a MSISDN (`593XXXXXXXXX`) antes de llamar a Meta, que
+rechaza cualquier otro formato. La auditoría de prod del 2026-07-30 sobre 18 clientes
+encontró **9** ya en `+593…`, **4** en local `09…`, **3** móviles pelados `9…` y **2**
+irrecuperables (uno de 8 dígitos, uno con el 0 troncal duplicado tras el país) que
+necesitan corrección manual. El front (`normalizeEcMobile` en `src/lib/format.ts`)
+valida y guarda ya normalizado, así que el problema no vuelve a entrar por el alta.
 
 1. **Secrets de la función** `notification-dispatch`:
    - `WHATSAPP_DRY_RUN=false`
