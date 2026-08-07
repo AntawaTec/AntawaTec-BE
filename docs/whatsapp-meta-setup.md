@@ -18,11 +18,11 @@
 | Normalización de números a MSISDN (`_shared/phone.ts`) | ✅ construido (2026-07-30) |
 | Acceso de Matias al portfolio "Antawa Tec" | ✅ invitación aceptada 2026-07-30 |
 | WABA + número registrado (`+593 98 392 6448`, Phone ID `1064755926716530`) | ✅ conectado, calidad Alta |
-| Las 6 plantillas | 🟡 creadas 2026-07-30, **en revisión** por Meta |
-| **Método de pago en la WABA `1644478160040571`** | ⛔ **falta — bloquea el envío business-initiated** |
-| **Verificación del negocio** | ⛔ pendiente (cap 250 conv/día, máx 2 números) |
-| Publicar la app `1003852111528931` (sale de modo desarrollo) | ⛔ pendiente |
-| Envío REAL (token + Phone Number ID) | ⛔ pendiente de lo anterior |
+| Las 6 plantillas | ✅ **APROBADAS** (verificado 2026-08-06) — ⚠️ `vehicle_received` sigue en Marketing, ver nota abajo |
+| Método de pago en la WABA `1644478160040571` | ✅ resuelto (2026-08) |
+| Verificación del negocio | 🟡 **en curso** (no bloquea el arranque: el cap de 250 conv/día alcanza) |
+| Publicar la app `1003852111528931` (sale de modo desarrollo) | ⛔ pendiente — falta URL de política de privacidad (va a `antwt.com`) |
+| Envío REAL (token + Phone Number ID) | ⛔ pendiente: System User + token + secrets |
 
 ---
 
@@ -86,9 +86,13 @@ variables como **parámetros posicionales de body** (`components[].body`). El or
 
 **Registradas el 2026-07-30** en la WABA `1644478160040571`, idioma **Spanish (`es`)**,
 categoría **Servicio (Utility)** — todas en estado *En revisión*.
-⚠️ `vehicle_received` quedó por error en categoría **Marketing**; no se puede corregir ni
-borrar mientras esté en revisión. Al aprobarse: verificar la categoría y, si sigue en
-Marketing, cambiarla a Servicio (Meta suele recategorizar solo los textos transaccionales).
+⚠️ `vehicle_received` quedó por error en categoría **Marketing** y tras la aprobación
+**sigue en Marketing** (verificado 2026-08-06). La UI del Administrador de WhatsApp NO
+permite editar la categoría (etiqueta fija en el editor). Corregirla vía Graph API con el
+token del System User (`whatsapp_business_management`):
+`POST https://graph.facebook.com/v21.0/1063928546306209` body `{"category":"UTILITY"}`
+(ese id es el template id de `vehicle_received`; vuelve a revisión unos minutos).
+**NO borrar la plantilla**: un nombre borrado queda bloqueado 30 días.
 
 > Nota: `quote_ready` tiene su render listo pero **aún no se dispara** (el evento
 > "enviar cotización al cliente" no existe todavía en el producto). Registrar la
