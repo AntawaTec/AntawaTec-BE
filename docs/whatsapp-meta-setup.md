@@ -17,8 +17,12 @@
 | Cron (pg_cron + pg_net) | ✅ migración `0024` (no-op hasta configurar URL/secret) |
 | Normalización de números a MSISDN (`_shared/phone.ts`) | ✅ construido (2026-07-30) |
 | Acceso de Matias al portfolio "Antawa Tec" | ✅ invitación aceptada 2026-07-30 |
-| **Aprobación de Meta (Business Verification + WABA + plantillas)** | ⛔ **pendiente — sin inventariar** |
-| Envío REAL (token + Phone Number ID) | ⛔ pendiente de lo anterior |
+| WABA + número registrado (`+593 98 392 6448`, Phone ID `1064755926716530`) | ✅ conectado, calidad Alta |
+| Las 6 plantillas | ✅ **APROBADAS** (verificado 2026-08-06) — ⚠️ `vehicle_received` sigue en Marketing, ver nota abajo |
+| Método de pago en la WABA `1644478160040571` | ✅ resuelto (2026-08) |
+| Verificación del negocio | 🟡 **en curso** (no bloquea el arranque: el cap de 250 conv/día alcanza) |
+| Publicar la app `1003852111528931` (sale de modo desarrollo) | ⛔ pendiente — falta URL de política de privacidad (va a `antwt.com`) |
+| Envío REAL (token + Phone Number ID) | ⛔ pendiente: System User + token + secrets |
 
 ---
 
@@ -64,14 +68,31 @@ variables como **parámetros posicionales de body** (`components[].body`). El or
 `{{1}}, {{2}}, {{3}}` lo fija `renderTemplate()` en
 `supabase/functions/_shared/notificationTemplates.ts` (campo `components`).
 
+> ### Dos reglas de Meta que condicionan la redacción
+> Descubiertas al registrar las plantillas el **2026-07-30** — el contrato original
+> las violaba y **no era registrable**:
+> 1. Una plantilla **no puede empezar con variable** → de ahí el prefijo `Hola `.
+> 2. Tampoco puede **terminar con variable**, y un punto final **no alcanza**: hace
+>    falta texto real después → de ahí `Te esperamos.` y `¡Gracias por confiar en nosotros!`.
+
 | Nombre (exacto) | Texto (body) | `{{1}}` | `{{2}}` | `{{3}}` |
 |---|---|---|---|---|
-| `appointment_confirmed` | `{{1}}, tu cita para {{2}} quedó confirmada para el {{3}}.` | cliente | vehículo | fecha/hora |
-| `appointment_reminder_24h` | `{{1}}, te recordamos tu cita para {{2}} mañana, {{3}}.` | cliente | vehículo | fecha/hora |
-| `vehicle_received` | `{{1}}, recibimos {{2}} en el taller. Te avisamos cuando esté listo.` | cliente | vehículo | — |
-| `vehicle_ready` | `{{1}}, {{2}} ya está listo para retirar.` | cliente | vehículo | — |
-| `delivery_completed` | `{{1}}, gracias por confiar en nosotros. Entregamos {{2}}. Resumen: {{3}}.` | cliente | vehículo | resumen |
-| `quote_ready` | `{{1}}, la cotización para {{2}} está lista para tu revisión.` | cliente | vehículo | — |
+| `appointment_confirmed` | `Hola {{1}}, tu cita para {{2}} quedó confirmada para el {{3}}. Te esperamos.` | cliente | vehículo | fecha/hora |
+| `appointment_reminder_24h` | `Hola {{1}}, te recordamos tu cita para {{2}} mañana {{3}}. Te esperamos.` | cliente | vehículo | fecha/hora |
+| `vehicle_received` | `Hola {{1}}, recibimos {{2}} en el taller. Te avisamos cuando esté listo.` | cliente | vehículo | — |
+| `vehicle_ready` | `Hola {{1}}, {{2}} ya está listo para retirar.` | cliente | vehículo | — |
+| `delivery_completed` | `Hola {{1}}, entregamos {{2}}. Resumen del servicio: {{3}}. ¡Gracias por confiar en nosotros!` | cliente | vehículo | resumen |
+| `quote_ready` | `Hola {{1}}, la cotización para {{2}} está lista para tu revisión.` | cliente | vehículo | — |
+
+**Registradas el 2026-07-30** en la WABA `1644478160040571`, idioma **Spanish (`es`)**,
+categoría **Servicio (Utility)** — todas en estado *En revisión*.
+⚠️ `vehicle_received` quedó por error en categoría **Marketing** y tras la aprobación
+**sigue en Marketing** (verificado 2026-08-06). La UI del Administrador de WhatsApp NO
+permite editar la categoría (etiqueta fija en el editor). Corregirla vía Graph API con el
+token del System User (`whatsapp_business_management`):
+`POST https://graph.facebook.com/v21.0/1063928546306209` body `{"category":"UTILITY"}`
+(ese id es el template id de `vehicle_received`; vuelve a revisión unos minutos).
+**NO borrar la plantilla**: un nombre borrado queda bloqueado 30 días.
 
 > Nota: `quote_ready` tiene su render listo pero **aún no se dispara** (el evento
 > "enviar cotización al cliente" no existe todavía en el producto). Registrar la

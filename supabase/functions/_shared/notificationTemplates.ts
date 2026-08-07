@@ -42,6 +42,12 @@ function vehicleLabel(p: NotificationPayload): string {
   return [mm, p.plate].filter(Boolean).join(" ") || "tu vehículo";
 }
 
+// Los textos arrancan con "Hola {{1}}", así que el fallback no puede ser "Hola"
+// (quedaría "Hola Hola,"). Ver la nota sobre las reglas de Meta más abajo.
+function customerName(p: NotificationPayload): string {
+  return p.customer_name ?? "cliente";
+}
+
 function fmtDate(iso?: string | null): string {
   if (!iso) return "la fecha agendada";
   // Formato simple y estable (sin locale del runtime): "2026-06-25 09:00".
@@ -49,55 +55,66 @@ function fmtDate(iso?: string | null): string {
 }
 
 // Una función de render por plantilla. Cada una arma text + components (mismas vars).
+//
+// ⚠️ Los textos NO son libres: espejan carácter por carácter las plantillas
+// registradas en Meta (WABA 1644478160040571, categoría Servicio/Utility, idioma
+// Spanish `es`). Si cambia uno, hay que cambiar el otro o el envío falla.
+//
+// Dos reglas de Meta condicionan la redacción (descubiertas al registrarlas el
+// 2026-07-30, el contrato viejo las violaba y era irregistrable):
+//   1. una plantilla NO puede EMPEZAR con variable → de ahí el prefijo "Hola ".
+//   2. tampoco puede TERMINAR con variable, y un punto final no alcanza: hace
+//      falta texto real después → de ahí los cierres "Te esperamos." y
+//      "¡Gracias por confiar en nosotros!".
 const RENDERERS: Record<NotificationTemplate, (p: NotificationPayload) => RenderedNotification> = {
   appointment_confirmed: (p) => {
-    const name = p.customer_name ?? "Hola";
+    const name = customerName(p);
     const veh = vehicleLabel(p);
     const date = fmtDate(p.scheduled_at);
     return {
-      text: `${name}, tu cita para ${veh} quedó confirmada para el ${date}.`,
+      text: `Hola ${name}, tu cita para ${veh} quedó confirmada para el ${date}. Te esperamos.`,
       components: [name, veh, date],
     };
   },
   appointment_reminder_24h: (p) => {
-    const name = p.customer_name ?? "Hola";
+    const name = customerName(p);
     const veh = vehicleLabel(p);
     const date = fmtDate(p.scheduled_at);
     return {
-      text: `${name}, te recordamos tu cita para ${veh} mañana, ${date}.`,
+      text: `Hola ${name}, te recordamos tu cita para ${veh} mañana ${date}. Te esperamos.`,
       components: [name, veh, date],
     };
   },
   vehicle_received: (p) => {
-    const name = p.customer_name ?? "Hola";
+    const name = customerName(p);
     const veh = vehicleLabel(p);
     return {
-      text: `${name}, recibimos ${veh} en el taller. Te avisamos cuando esté listo.`,
+      text: `Hola ${name}, recibimos ${veh} en el taller. Te avisamos cuando esté listo.`,
       components: [name, veh],
     };
   },
   quote_ready: (p) => {
-    const name = p.customer_name ?? "Hola";
+    const name = customerName(p);
     const veh = vehicleLabel(p);
     return {
-      text: `${name}, la cotización para ${veh} está lista para tu revisión.`,
+      text: `Hola ${name}, la cotización para ${veh} está lista para tu revisión.`,
       components: [name, veh],
     };
   },
   vehicle_ready: (p) => {
-    const name = p.customer_name ?? "Hola";
+    const name = customerName(p);
     const veh = vehicleLabel(p);
     return {
-      text: `${name}, ${veh} ya está listo para retirar.`,
+      text: `Hola ${name}, ${veh} ya está listo para retirar.`,
       components: [name, veh],
     };
   },
   delivery_completed: (p) => {
-    const name = p.customer_name ?? "Hola";
+    const name = customerName(p);
     const veh = vehicleLabel(p);
     const summary = p.services_summary ?? "el servicio realizado";
     return {
-      text: `${name}, gracias por confiar en nosotros. Entregamos ${veh}. Resumen: ${summary}.`,
+      text: `Hola ${name}, entregamos ${veh}. Resumen del servicio: ${summary}. ¡Gracias por confiar en nosotros!`,
       components: [name, veh, summary],
     };
   },
