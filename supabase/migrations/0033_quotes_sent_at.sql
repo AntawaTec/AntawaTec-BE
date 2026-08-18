@@ -1,0 +1,25 @@
+-- =============================================================================
+-- 0033_quotes_sent_at.sql
+-- Marca de "cotización enviada al cliente" (quotes.sent_at).
+--
+-- Es el DISPARADOR del evento quote_ready: el barrido de notification-dispatch
+-- encola cuando sent_at deja de ser NULL (WhatsApp + email). Hasta hoy la
+-- plantilla quote_ready estaba aprobada en Meta pero huérfana — no existía el
+-- evento que la dispara.
+--
+-- Por qué una columna y NO un valor del enum quote_status: "enviada" es
+-- ORTOGONAL al ciclo draft/approved/rejected — se envía justamente estando en
+-- draft, para que el cliente la revise, y sigue en draft hasta que él decide.
+-- Meter el envío en el status obligaría a elegir entre dos verdades a la vez.
+--
+-- Nullable, sin default: nace NULL en TODAS las filas existentes => quote_ready
+-- no genera backlog histórico (a diferencia de vehicle_received y compañía, que
+-- sí lo tienen — ver el Paso 0 de docs/whatsapp-meta-setup.md).
+--
+-- Sin cambios de RLS: la policy estándar de `quotes` (apply_tenant_rls en 0005)
+-- ya permite el UPDATE del dueño sobre su taller, y el deny-by-default de
+-- 0020–0022 deja afuera a los técnicos, que es lo correcto (enviarle la
+-- cotización al cliente es decisión del dueño).
+-- =============================================================================
+
+alter table public.quotes add column sent_at timestamptz;
