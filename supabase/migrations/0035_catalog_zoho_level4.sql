@@ -5,7 +5,8 @@
 -- CONTEXTO. El árbol de `reparacion` de Zoho Creator tiene un nivel más que el catálogo
 -- sembrado en 0026: los talleres marcan "Alternador → Diodos", "Motor de arranque →
 -- Bendix", "Mesas de suspensión → Superiores"… y esas hojas no tenían destino, así que
--- el import las perdería. Se siembran los 36 nodos faltantes para importar con fidelidad.
+-- el import las perdería. Se siembran los 36 nodos faltantes de `reparacion` (más 3 de
+-- `enderezada_pintura`, abajo) para poder importar con fidelidad.
 --
 -- FUENTE DE VERDAD. Meta de la API de Zoho Creator v2.1 (`/meta/{owner}/antawamulti/form/
 -- Reparaciones_Service_Log/fields`, leída el 2026-08-25): cada campo t15 es un nodo padre
@@ -61,6 +62,22 @@ insert into public.catalog_items (id, module, parent_id, name, selection_type, e
   ('c2000000-0000-4000-8000-000000000119', 'reparacion', 'c2000000-0000-4000-8000-000000000055', 'Placa rectificadora', 'boolean', null, 4),  -- Reparación Electrónica › Sistema de carga › Alternador › Placa rectificadora
   ('c2000000-0000-4000-8000-000000000120', 'reparacion', 'c2000000-0000-4000-8000-000000000055', 'Polea', 'boolean', null, 5),  -- Reparación Electrónica › Sistema de carga › Alternador › Polea
   ('c2000000-0000-4000-8000-000000000121', 'reparacion', 'c2000000-0000-4000-8000-000000000055', 'Rodamientos', 'boolean', null, 6)   -- Reparación Electrónica › Sistema de carga › Alternador › Rodamientos
+on conflict (id) do nothing;
+
+-- ── Tres sub-componentes de "Capota" que 0026 omitió ──────────────────────────────────
+-- Detectados al construir la tabla de traducción (scripts/zoho/build-catalog-map.mjs del
+-- FE): los campos `Soporte_LH_Capote`, `Soporte_de_faro_FDR` y `Soporte_de_faro_FDL`
+-- existen en las TRES apps de Zoho (multi, Greenwash y DC) y no tenían destino — el
+-- importador los perdería. Es la misma omisión que 0026 ya corrigió al espejar los
+-- sub-componentes de "Puerta Delantera LH" desde RH.
+--
+-- Los dos "Soporte de faro" comparten etiqueta en Zoho (uno de ellos con espacio duro
+-- `&#xa0;` al final): se desambiguan como RH/LH porque el unique de hermanos es por
+-- nombre. La tabla de traducción mapea por LINK NAME, así que el nombre visible es libre.
+insert into public.catalog_items (id, module, parent_id, name, selection_type, enum_options, sort_order) values
+  ('c3000000-0000-4000-8000-000000000153', 'enderezada_pintura', 'c3000000-0000-4000-8000-000000000012', 'Soporte LH Capote', 'enum_select', array['RR','REP','Pintura'], 8),
+  ('c3000000-0000-4000-8000-000000000154', 'enderezada_pintura', 'c3000000-0000-4000-8000-000000000012', 'Soporte de faro RH', 'enum_select', array['RR','REP','Pintura'], 9),
+  ('c3000000-0000-4000-8000-000000000155', 'enderezada_pintura', 'c3000000-0000-4000-8000-000000000012', 'Soporte de faro LH', 'enum_select', array['RR','REP','Pintura'], 10)
 on conflict (id) do nothing;
 
 -- ── Decisión #20: "Directrices" era un error de traducción ────────────────────────────
