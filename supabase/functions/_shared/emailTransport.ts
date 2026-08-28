@@ -8,10 +8,13 @@
 // Real: POST a la API de Resend con el HTML que produjo emailTemplates.ts.
 //
 // Dos detalles del remitente que NO son cosméticos:
-//   - `from` = "Nombre del taller <notificaciones@antwt.com>". El dominio verificado
-//     es uno solo (antwt.com) y lo comparten los ~18 talleres; el display name es lo
-//     único que le dice al cliente de qué taller viene el correo. Mismo problema que
-//     en WhatsApp (una WABA, un número), misma solución: identidad en el contenido.
+//   - `from` = "Nombre del taller <notificaciones@mail.antwt.com>". El dominio
+//     verificado en Resend es uno solo y es el SUBDOMINIO `mail.antwt.com` (el apex
+//     `antwt.com` NO está verificado: Resend responde 403 "domain is not verified" y
+//     la fila muere tras 5 intentos — pasó en prod del 19 al 27-ago-2026). Lo
+//     comparten los ~18 talleres; el display name es lo único que le dice al cliente
+//     de qué taller viene el correo. Mismo problema que en WhatsApp (una WABA, un
+//     número), misma solución: identidad en el contenido.
 //   - `reply_to` = shops.contact_email cuando exista. La casilla del remitente NO se
 //     monitorea; sin reply-to, un cliente que responde le escribe al vacío. Con él,
 //     la respuesta cae en el taller correcto — es la contracara del aviso de "una
@@ -29,7 +32,8 @@ export interface EmailSendOptions {
   replyTo?: string | null; // shops.contact_email
 }
 
-const DEFAULT_FROM = "notificaciones@antwt.com";
+// Mismo subdominio que usa el SMTP de Auth en el dashboard. Se puede pisar con EMAIL_FROM.
+const DEFAULT_FROM = "notificaciones@mail.antwt.com";
 // Suficiente para descartar basura evidente sin re-implementar RFC 5322.
 const EMAIL_RE = /.+@.+\..+/;
 
