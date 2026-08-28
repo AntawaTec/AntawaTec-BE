@@ -31,7 +31,7 @@
 | Publicar la app `1003852111528931` (sale de modo desarrollo) | ⛔ pendiente — falta URL de política de privacidad (va a `antwt.com`) |
 | Envío REAL de WhatsApp (token + Phone Number ID) | ⛔ pendiente: System User + token + secrets |
 | Canal email (Resend): render + transporte + encolado | ✅ construido 2026-08 (dry-run por defecto) |
-| Envío REAL de email (`RESEND_API_KEY`) | ⛔ pendiente: crear la key y setear el secret |
+| Envío REAL de email (`RESEND_API_KEY` + `EMAIL_DRY_RUN=false`) | ✅ encendido 2026-08-19; **funcionando recién desde 2026-08-28** (hasta entonces todo fallaba con 403 por el remitente en el apex, ver «Remitente») |
 
 ---
 
@@ -259,9 +259,12 @@ whatsapp-only (`renderEmail()` devuelve `null` para ellos).
 | `quote_ready` | `Cotización N° 0042 — <taller>` | Encabezado con logo/nombre/dirección/teléfono del taller, vehículo, una tabla por sección (`Mantenimiento y Reparación` / `Enderezada y Pintura`) con ítems, cantidad, precio unitario y total de línea, y el bloque subtotal / IVA / total. |
 | `vehicle_received` | `Recibimos tu vehículo — <taller>` | Confirmación de recepción. Si la orden nace de una cotización (`work_orders.quote_id`), suma el desglose de los trabajos acordados; si no, es solo el acuse. |
 
-**Remitente y respuestas.** El dominio verificado en Resend es uno solo (`antwt.com`) y
-lo comparten todos los talleres, así que la identidad va en el **display name**:
-`Taller Pablo <notificaciones@antwt.com>`. Además se manda **`reply_to` =
+**Remitente y respuestas.** El dominio verificado en Resend es uno solo y es el
+**subdominio `mail.antwt.com`** (el apex `antwt.com` **no** está verificado — es el mismo
+gotcha del SMTP de Auth: con `@antwt.com` Resend devuelve `403 The antwt.com domain is not
+verified`, la fila consume sus 5 intentos y queda `failed` para siempre). Lo comparten todos
+los talleres, así que la identidad va en el **display name**:
+`Taller Pablo <notificaciones@mail.antwt.com>`. Además se manda **`reply_to` =
 `shops.contact_email`** cuando existe: la casilla del remitente **no se monitorea**, y
 sin reply-to el cliente que responde le escribe al vacío. (Esta es la diferencia con
 WhatsApp, donde el canal es explícitamente de una vía.)
@@ -280,7 +283,8 @@ auditable.
 - `EMAIL_DRY_RUN` — default `true`. **No hace falta setearlo** para quedar en sandbox.
 - `RESEND_API_KEY` — sin ella el transporte se queda en dry-run aunque el flag esté en
   `false` (misma lógica de doble candado que WhatsApp).
-- `EMAIL_FROM` — opcional, default `notificaciones@antwt.com` (dominio ya verificado).
+- `EMAIL_FROM` — opcional, default `notificaciones@mail.antwt.com`. Si se setea, **tiene que
+  ser `@mail.antwt.com`** (o de otro dominio verificado en la cuenta Resend `antwt`).
 
 ```
 supabase secrets set RESEND_API_KEY=re_...
