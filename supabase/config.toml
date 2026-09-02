@@ -439,6 +439,14 @@ verify_jwt = false
 [functions.notification-dispatch]
 verify_jwt = false
 
+# whatsapp-webhook: lo invoca META, que no puede mandar un JWT de Supabase.
+# verify_jwt = false y la auth real va DENTRO de la función: el handshake GET
+# valida `hub.verify_token` == WHATSAPP_WEBHOOK_VERIFY_TOKEN y cada POST valida la
+# firma HMAC-SHA256 del cuerpo crudo (`x-hub-signature-256`) con WHATSAPP_APP_SECRET.
+# En prod AMBOS secrets DEBEN estar seteados.
+[functions.whatsapp-webhook]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
