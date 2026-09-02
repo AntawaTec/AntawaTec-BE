@@ -406,7 +406,7 @@ async function drain(admin: ReturnType<typeof createAdminClient>): Promise<{ sen
   let sent = 0, failed = 0;
   for (const row of data ?? []) {
     const attempts = (row.attempts as number) + 1;
-    let res: { ok: boolean; dryRun: boolean; error?: string };
+    let res: { ok: boolean; dryRun: boolean; error?: string; messageId?: string };
     // Lo que queda en payload.rendered: el texto del WhatsApp o el SUBJECT del
     // correo (no el HTML — es reproducible desde el snapshot y no vale inflar la
     // fila del log con 6 KB de tablas).
@@ -440,6 +440,9 @@ async function drain(admin: ReturnType<typeof createAdminClient>): Promise<{ sen
       await admin.from("notification_log").update({
         status: "sent", sent_at: new Date().toISOString(), attempts,
         payload: { ...payload, rendered, dry_run: res.dryRun },
+        // wamid de la Cloud API: sin él, el webhook de estados (0038) no puede
+        // correlacionar el recibo con esta fila. Solo el canal WhatsApp real lo trae.
+        ...(res.messageId ? { provider_message_id: res.messageId, provider_status: "accepted" } : {}),
       }).eq("id", row.id as string);
       sent++;
     } else {

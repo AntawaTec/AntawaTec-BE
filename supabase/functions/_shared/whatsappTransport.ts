@@ -15,6 +15,12 @@ export interface SendResult {
   ok: boolean;
   dryRun: boolean;
   error?: string;
+  /**
+   * wamid que devuelve la Cloud API al aceptar el mensaje. Es la única llave con
+   * la que el webhook de estados (`whatsapp-webhook`) puede encontrar la fila de
+   * `notification_log`: Meta no conoce nuestros uuid. Ausente en dry-run.
+   */
+  messageId?: string;
 }
 
 function isDryRun(): boolean {
@@ -65,7 +71,19 @@ export async function sendWhatsApp(
       }),
     });
     if (!res.ok) return { ok: false, dryRun: false, error: `Meta ${res.status}: ${await res.text()}` };
-    return { ok: true, dryRun: false };
+
+    // 200 = Meta ACEPTÓ el mensaje (no que lo entregó). El wamid que viene acá se
+    // guarda en notification_log y lo usa el webhook para asentar delivered/read.
+    // Si el body no parsea, el envío igual fue bueno: no lo convertimos en error,
+    // solo perdemos la trazabilidad de ESE mensaje.
+    let messageId: string | undefined;
+    try {
+      const body = await res.json() as { messages?: Array<{ id?: string }> };
+      messageId = body.messages?.[0]?.id;
+    } catch {
+      messageId = undefined;
+    }
+    return { ok: true, dryRun: false, messageId };
   } catch (e) {
     return { ok: false, dryRun: false, error: e instanceof Error ? e.message : String(e) };
   }
