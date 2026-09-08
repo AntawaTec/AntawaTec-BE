@@ -62,3 +62,9 @@ jobs:
       # 4 entrypoints cubre transitivamente todo _shared.
       - name: Type-check functions
         run: deno check supabase/functions/*/index.ts
+
+      # Tests unitarios de las utilidades PURAS de _shared (hoy: el proveedor Twilio —
+      # cuerpo de Messages.json, mapeo de estados y firma del webhook). Sin red ni base:
+      # --allow-env alcanza porque los transports leen Deno.env.
+      - name: Unit tests (deno test)
+        run: deno test --allow-env supabase/functions/
