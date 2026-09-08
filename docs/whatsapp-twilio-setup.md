@@ -214,3 +214,41 @@ siguen recibiendo callbacks por `twilio-status-webhook`, que queda desplegado.
 | `Twilio 400: … 63016 …` | se mandó fuera de la ventana de 24 h sin plantilla aprobada, o el ContentSid no corresponde a ese sender |
 | `Twilio 400: … 21211 …` | `To` inválido — mirar `_shared/phone.ts`, el número no era un móvil EC normalizable |
 | Los callbacks no asientan nada | la URL del sender no coincide con `TWILIO_STATUS_CALLBACK_URL` (403 por firma), o el mensaje salió antes del switch y su id es un `wamid` de Meta |
+
+---
+
+## Estado real de la cuenta Twilio (2026-09-08)
+
+Cuenta **"My First Twilio Account"** (Account SID termina en `…88a7a`; se lee en
+Console → Account Info y NO va en el repo: la push protection de GitHub lo bloquea).
+Única del usuario, upgraded, saldo USD 20. Hecho por Claude desde la Console:
+
+- **Las 6 plantillas están CREADAS y ENVIADAS a revisión de WhatsApp** (estado
+  `Received`, categoría `Utility`, idioma Spanish (ES), tipo Text). El cuerpo coincide
+  carácter por carácter con `notificationTemplates.ts`, saltos de línea incluidos.
+  Valores de muestra cargados (`Andrés`, `Chevrolet Sail PBC-5251`, fecha, firma).
+
+| Plantilla | Content SID |
+|---|---|
+| `appointment_confirmed` | `HX0208b77529d233a337dae0c34f508b91` |
+| `appointment_reminder_24h` | `HXf5fdfe6d67c0552e74abb1caef3ab4ad` |
+| `vehicle_received` | `HX5fc95937a79372a909f6c5402da4ca52` |
+| `quote_ready` | `HXa237edd658858248ac58fc464b46eca0` |
+| `vehicle_ready` | `HXea2ced0ad18db06df67c4adccf78e691` |
+| `delivery_completed` | `HXa405769d018367ad96a48f0d034d15ac` |
+
+Valor listo para pegar en el secret `TWILIO_CONTENT_SIDS`:
+
+```json
+{"appointment_confirmed":"HX0208b77529d233a337dae0c34f508b91","appointment_reminder_24h":"HXf5fdfe6d67c0552e74abb1caef3ab4ad","vehicle_received":"HX5fc95937a79372a909f6c5402da4ca52","quote_ready":"HXa237edd658858248ac58fc464b46eca0","vehicle_ready":"HXea2ced0ad18db06df67c4adccf78e691","delivery_completed":"HXa405769d018367ad96a48f0d034d15ac"}
+```
+
+- **NO hay sender de WhatsApp registrado** (Numbers & senders → WhatsApp muestra el
+  "Get Started" inicial; tampoco hay números de Twilio ni sandbox activado). Ese paso
+  exige login de Facebook con acceso al portafolio de Meta, OTP al número y aceptar los
+  términos de Meta/Twilio: lo hace una persona, no Claude. Hasta que exista el sender,
+  `TWILIO_WHATSAPP_FROM` no tiene valor y las plantillas aprobadas no se pueden usar.
+- Gotchas de la Console (One Console, `1console.twilio.com`): las páginas tardan
+  5–10 s en hidratar; el editor de cuerpo acepta setear el `textarea` por JS con el
+  native setter + evento `input`; el botón final "Submit" del diálogo de categoría hay
+  que clickearlo de verdad (un `.click()` por JS no dispara el envío).
