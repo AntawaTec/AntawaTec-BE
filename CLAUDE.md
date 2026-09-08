@@ -142,6 +142,9 @@ WhatsApp Cloud API (Meta, oficial) primario; Resend como fallback de email. 6
 plantillas: `appointment_confirmed`, `appointment_reminder_24h`, `vehicle_received`,
 `quote_ready`, `vehicle_ready`, `delivery_completed`. Despachadas por Edge Functions
 con cola de reintento; todo queda en `notification_log`. Sin chatbot en V1 (solo salida).
+El WhatsApp tiene **dos proveedores intercambiables por env** (`WHATSAPP_PROVIDER`:
+`meta` por default, `twilio` como BSP) — mismo render y mismo `notification_log`,
+cambia solo el transporte y su webhook de estados (`docs/whatsapp-twilio-setup.md`).
 
 ## Lógica que NO va en triggers de DB (va en Edge/app)
 - Cotización aprobada → crear cita.
@@ -244,6 +247,22 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   jamás cuentas sin él (no secuestrar owners del funnel). Sin migración: todo corre con
   service_role sobre el esquema de `0020`–`0022`. El template de invite pasó a copy neutro
   (lo comparten dueño y técnico); replicarlo a mano en el Dashboard hosted al deployar.
+
+- `[2026-09]` **Twilio como proveedor alternativo de WhatsApp** (`WHATSAPP_PROVIDER`,
+  default `meta`): Meta factura contra la tarjeta de la WABA y el cobro rebotado dejó el
+  canal a punto de cortarse; Twilio es BSP y factura él contra su propia línea con Meta.
+  Se aisló lo del proveedor (`_shared/twilio.ts` + dos ramas en `whatsappTransport.ts`)
+  igual que los proveedores de pago: el render, el dedupe, los reintentos y
+  `notification_log` no se enteran. Dos detalles que mandan: (a) Twilio no acepta el
+  NOMBRE de la plantilla sino su **Content SID** (`HX…`), así que el mapeo va en el secret
+  `TWILIO_CONTENT_SIDS` y su ausencia corta ANTES de la red (un POST sin ContentSid
+  quemaría los 5 intentos con el mismo 400); (b) el doble candado del dry-run mira las
+  credenciales **del proveedor elegido**, para que un switch a medias quede en sandbox y
+  no mande por Meta con la config incompleta. El asiento de los recibos de entrega se
+  extrajo a `_shared/deliveryReceipts.ts` porque las dos reglas críticas (un fallo de
+  ENTREGA no toca `status`; rank que nunca retrocede) tienen que valer igual para los dos
+  webhooks. Firma de Twilio = HMAC-SHA1 sobre `url + params ordenados`, así que la URL
+  pública tiene que ser **idéntica** a la registrada (`TWILIO_STATUS_CALLBACK_URL`).
 
 ## Qué evitar
 - No editar migraciones ya aplicadas.

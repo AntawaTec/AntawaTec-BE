@@ -12,6 +12,13 @@
 > encola **una fila por canal** y el dedupe es por `(entidad, plantilla, canal)`
 > (migración `0034`). Los flags `WHATSAPP_DRY_RUN` y `EMAIL_DRY_RUN` son
 > **independientes**: se puede encender uno y dejar el otro en sandbox.
+>
+> **Desde 2026-09 el WhatsApp tiene DOS proveedores posibles** (`WHATSAPP_PROVIDER`,
+> default `meta`): esta guía cubre el camino **Meta directo**; el alternativo por
+> **Twilio** (BSP — factura él, para cuando el cobro de Meta traba la WABA) está en
+> [`whatsapp-twilio-setup.md`](./whatsapp-twilio-setup.md). El contrato de las 6
+> plantillas de este doc vale para los dos: Twilio pide re-crearlas en su Content
+> Template Builder con **el mismo cuerpo carácter por carácter**.
 
 ## Estado
 
@@ -31,6 +38,7 @@
 | Publicar la app `1003852111528931` (sale de modo desarrollo) | ⛔ pendiente — falta URL de política de privacidad (va a `antwt.com`) |
 | Envío REAL de WhatsApp (token + Phone Number ID) | ⛔ pendiente: System User + token + secrets |
 | Canal email (Resend): render + transporte + encolado | ✅ construido 2026-08 (dry-run por defecto) |
+| Proveedor alternativo **Twilio** (transporte + `twilio-status-webhook`) | ✅ construido 2026-09, apagado por default (`WHATSAPP_PROVIDER=meta`) — falta registrar el sender y re-crear las 6 plantillas, ver [`whatsapp-twilio-setup.md`](./whatsapp-twilio-setup.md) |
 | Envío REAL de email (`RESEND_API_KEY` + `EMAIL_DRY_RUN=false`) | ✅ encendido 2026-08-19; **funcionando recién desde 2026-08-28** (hasta entonces todo fallaba con 403 por el remitente en el apex, ver «Remitente») |
 
 ---
