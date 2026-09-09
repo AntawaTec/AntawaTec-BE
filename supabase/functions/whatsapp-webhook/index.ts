@@ -1,6 +1,6 @@
 // =============================================================================
 // whatsapp-webhook/index.ts
-// Receptor de los RECIBOS DE ENTREGA de la WhatsApp Cloud API.
+// Receptor de los RECIBOS DE ENTREGA de la WhatsApp Cloud API (Meta).
 //
 // Por qué existe: hasta ahora `notification_log.status = 'sent'` significaba solo
 // "Meta devolvió 200" (la Cloud API acepta el mensaje y lo entrega después). Sin
@@ -12,10 +12,9 @@
 // la Cloud API devuelve al aceptar el envío y que notification-dispatch guarda en
 // `notification_log.provider_message_id` (migración 0038).
 //
-// REGLA CRÍTICA: un fallo de ENTREGA no toca `notification_log.status`. El drenado
-// de notification-dispatch reencola `status='failed' and attempts < 5`, así que
-// escribir 'failed' acá dispararía un REENVÍO de un mensaje que Meta ya aceptó y
-// cobró. El fallo vive en `provider_status` + `error`, que son informativos.
+// La escritura sobre `notification_log` (rank de estados + la REGLA CRÍTICA de
+// que un fallo de ENTREGA no toca `status`) vive en `_shared/deliveryReceipts.ts`,
+// compartida con `twilio-status-webhook`. El porqué de las dos reglas está ahí.
 //
 // Auth (no hay JWT posible: el que llama es Meta):
 //   GET  -> handshake de verificación, `hub.verify_token` == WHATSAPP_WEBHOOK_VERIFY_TOKEN.
@@ -30,11 +29,8 @@
 // =============================================================================
 
 import { createAdminClient } from "../_shared/supabaseAdmin.ts";
+import { applyDeliveryReceipt, timingSafeEqual } from "../_shared/deliveryReceipts.ts";
 import { badRequest, methodNotAllowed, ok, serverError, unauthorized } from "../_shared/response.ts";
-
-// Orden de progreso de un mensaje. El webhook puede llegar DESORDENADO (Meta no
-// garantiza orden), así que nunca retrocedemos `provider_status`.
-const RANK: Record<string, number> = { accepted: 0, sent: 1, delivered: 2, read: 3, failed: 4 };
 
 interface MetaStatus {
   id?: string;
@@ -58,14 +54,6 @@ function errorText(st: MetaStatus): string | null {
   if (!e) return null;
   const detail = e.error_data?.details ?? e.message ?? e.title ?? "sin detalle";
   return `Meta entrega ${e.code ?? "?"}: ${detail}`;
-}
-
-/** Comparación en tiempo constante: no filtra el secret por timing. */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }
 
 async function signatureIsValid(raw: string, header: string | null, secret: string): Promise<boolean> {
@@ -128,32 +116,17 @@ Deno.serve(async (req: Request) => {
     let updated = 0;
 
     for (const st of statuses) {
-      const { data: row } = await admin
-        .from("notification_log")
-        .select("id, provider_status, delivered_at, read_at, error")
-        .eq("provider_message_id", st.id)
-        .maybeSingle();
-
-      // wamid desconocido: mensaje que no salió de acá (o fila anterior a 0038).
-      if (!row) continue;
-
-      const current = RANK[(row.provider_status as string) ?? ""] ?? -1;
-      const incoming = RANK[st.status] ?? -1;
-      if (incoming <= current) continue; // reintento o webhook fuera de orden
-
-      const patch: Record<string, unknown> = { provider_status: st.status };
-      if (st.status === "delivered" && !row.delivered_at) patch.delivered_at = tsToIso(st.timestamp);
-      if (st.status === "read") {
-        patch.read_at = tsToIso(st.timestamp);
-        // 'read' implica entregado: si el webhook de delivered se perdió, no
-        // dejamos la fila mintiendo que nunca llegó.
-        if (!row.delivered_at) patch.delivered_at = tsToIso(st.timestamp);
-      }
-      // OJO: `status` NO se toca (ver cabecera). Solo dejamos el motivo legible.
-      if (st.status === "failed") patch.error = errorText(st) ?? "entrega fallida (sin detalle de Meta)";
-
-      const { error } = await admin.from("notification_log").update(patch).eq("id", row.id as string);
-      if (!error) updated++;
+      // El vocabulario de Meta (sent/delivered/read/failed) YA es el común: se
+      // pasa tal cual al asiento compartido, sin traducción.
+      const applied = await applyDeliveryReceipt(admin, {
+        providerMessageId: st.id,
+        status: st.status,
+        at: tsToIso(st.timestamp),
+        error: st.status === "failed"
+          ? errorText(st) ?? "entrega fallida (sin detalle de Meta)"
+          : null,
+      });
+      if (applied) updated++;
     }
 
     return ok({ received: statuses.length, updated });

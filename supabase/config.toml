@@ -447,6 +447,14 @@ verify_jwt = false
 [functions.whatsapp-webhook]
 verify_jwt = false
 
+# twilio-status-webhook: el gemelo del anterior para el proveedor ALTERNATIVO
+# (WHATSAPP_PROVIDER=twilio). Lo invoca TWILIO, que tampoco puede mandar un JWT
+# de Supabase. verify_jwt = false y la auth real va DENTRO: firma
+# `X-Twilio-Signature` = base64(HMAC-SHA1(TWILIO_AUTH_TOKEN, url + params POST
+# ordenados por clave)). En prod TWILIO_AUTH_TOKEN DEBE estar seteado.
+[functions.twilio-status-webhook]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
