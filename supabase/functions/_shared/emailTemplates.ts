@@ -4,16 +4,22 @@
 // notificationTemplates.ts, misma disciplina: el snapshot viaja en el payload y
 // renderizar es reproducible (editar la cotización después NO cambia lo enviado).
 //
-// Alcance v1 a propósito: SOLO quote_ready y vehicle_received. Son los dos eventos
-// donde el correo aporta algo que el WhatsApp no puede — el desglose con precios.
-// Los otros 4 (citas, listo para retirar, entrega) son avisos cortos y siguen
-// siendo whatsapp-only; renderEmail devuelve null para ellos y el drenado degrada
-// igual que con una plantilla desconocida.
+// Alcance (lote L2 — «correos de la orden»): CUATRO plantillas.
+//   quote_ready        → desglose de la cotización con precios (HTML).
+//   vehicle_received   → acuse de recepción + ORDEN DE TRABAJO en PDF adjunto.
+//   work_in_process    → aviso corto de "ya estamos trabajando" (sin adjunto).
+//   delivery_completed → RECIBO DE ENTREGA en PDF adjunto.
+// Los otros tres eventos (las dos de citas y vehicle_ready) son avisos cortos que
+// siguen siendo whatsapp-only; renderEmail devuelve null para ellos y el drenado
+// degrada igual que con una plantilla desconocida.
+//
+// El PDF NO se arma acá: el render sigue siendo puro y devuelve solo asunto+HTML.
+// El adjunto lo genera el drenado (orderPdf.ts) y lo pega el transporte.
 //
 // El HTML está escrito para CLIENTES DE CORREO, no para navegadores: tablas en vez
 // de flex/grid, estilos INLINE (Gmail descarta <style> en la vista de conversación),
 // ancho fijo 600px, sin CSS externo, sin JS, sin webfonts. Feo de leer, robusto de
-// ver. Sin PDF adjunto en v1 (mejora futura).
+// ver.
 // =============================================================================
 
 import type { NotificationPayload } from "./notificationTemplates.ts";
@@ -75,7 +81,7 @@ function esc(s: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
-function money(n?: number | null): string {
+export function money(n?: number | null): string {
   const v = typeof n === "number" && Number.isFinite(n) ? n : 0;
   try {
     return `$ ${v.toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -265,8 +271,79 @@ function vehicleReceived(p: EmailPayload): RenderedEmail {
         paragraph(
           "Hemos recibido tu vehículo en el taller. Te avisamos cuando esté listo para retirar.",
         ),
+        // El adjunto siempre viaja con este correo (si el PDF no se pudo generar,
+        // la fila queda 'failed' y el correo no sale) — por eso se anuncia sin
+        // condicionales.
+        paragraph(
+          "Adjuntamos la <strong>orden de trabajo</strong> en formato PDF con el detalle de la recepción.",
+        ),
         vehicleBox(p),
         cuerpo,
+        paragraph(
+          "Cualquier inquietud, comunícate con el administrador del taller a los datos de contacto que aparecen arriba.",
+        ),
+      ].join("\n"),
+    ),
+  };
+}
+
+// El resumen de entrega lo tipea el taller: típicamente multilínea y con viñetas
+// a mano ("- cambio de aceite"). Se normaliza a <ul> escapando cada línea; vacío
+// devuelve "" y el renderer usa su párrafo de fallback.
+function summaryList(raw?: string | null): string {
+  const items = String(raw ?? "")
+    .split("\n")
+    .map((l) => l.trim().replace(/^[-–—•*]\s*/, "").trim())
+    .filter((l) => l.length > 0);
+  if (items.length === 0) return "";
+  const lis = items
+    .map(
+      (l) =>
+        `<li style="${FONT};font-size:14px;color:#374151;line-height:1.6;margin:0 0 4px 0;">${esc(l)}</li>`,
+    )
+    .join("\n");
+  return `          <ul style="margin:0 0 16px 0;padding:0 0 0 20px;">\n${lis}\n          </ul>`;
+}
+
+// "En proceso": el aviso más corto de los cuatro y el único SIN adjunto. Existe
+// porque el piloto pedía cerrar el hueco entre "recibimos tu auto" y "está listo"
+// (es el tramo en el que el cliente llama a preguntar).
+function workInProcess(p: EmailPayload): RenderedEmail {
+  return {
+    subject: `Tu vehículo está en proceso — ${shopName(p)}`,
+    html: layout(
+      p,
+      [
+        paragraph(`Hola ${esc(customerName(p))},`),
+        paragraph(
+          "Ya estamos trabajando en tu vehículo. Te avisamos apenas esté listo para retirar.",
+        ),
+        vehicleBox(p),
+        paragraph(
+          "Cualquier inquietud, comunícate con el administrador del taller a los datos de contacto que aparecen arriba.",
+        ),
+      ].join("\n"),
+    ),
+  };
+}
+
+// Entrega: el cuerpo es deliberadamente corto porque el documento REAL va
+// adjunto (recibo en PDF, generado por orderPdf.ts desde la orden fresca).
+function deliveryCompleted(p: EmailPayload): RenderedEmail {
+  const list = summaryList(p.services_summary);
+  return {
+    subject: `Recibo de entrega — ${shopName(p)}`,
+    html: layout(
+      p,
+      [
+        paragraph(`Hola ${esc(customerName(p))},`),
+        paragraph(
+          "Adjuntamos el recibo de entrega de tu vehículo en formato PDF. ¡Gracias por confiar en nosotros!",
+        ),
+        vehicleBox(p),
+        list
+          ? [paragraph("Resumen de los trabajos realizados:"), list].join("\n")
+          : paragraph("El detalle de los trabajos realizados está en el recibo adjunto."),
         paragraph(
           "Cualquier inquietud, comunícate con el administrador del taller a los datos de contacto que aparecen arriba.",
         ),
@@ -278,6 +355,8 @@ function vehicleReceived(p: EmailPayload): RenderedEmail {
 const EMAIL_RENDERERS: Record<string, (p: EmailPayload) => RenderedEmail> = {
   quote_ready: quoteReady,
   vehicle_received: vehicleReceived,
+  work_in_process: workInProcess,
+  delivery_completed: deliveryCompleted,
 };
 
 /** null = esa plantilla no tiene correo (alcance v1) → el drenado degrada. */

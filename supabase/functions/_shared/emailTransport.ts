@@ -19,7 +19,17 @@
 //     monitorea; sin reply-to, un cliente que responde le escribe al vacío. Con él,
 //     la respuesta cae en el taller correcto — es la contracara del aviso de "una
 //     vía" que sí aplica en WhatsApp.
+//
+// ADJUNTOS (lote L2, correos de la orden): Resend los toma como `attachments:
+// [{ filename, content, content_type }]` con `content` en BASE64. El armado del
+// cuerpo se extrajo a `buildResendBody()` — pura y exportada — porque es lo único
+// testeable sin red de todo el transporte, y un adjunto mal formado es un 422 que
+// quema los 5 intentos de la fila. Tope práctico de Resend: ~40 MB por mensaje
+// (base64 incluido); nuestros PDFs pesan decenas de KB, así que no hay control de
+// tamaño acá — si alguna vez hiciera falta, el lugar es este archivo.
 // =============================================================================
+
+import { encodeBase64 } from "jsr:@std/encoding@1/base64";
 
 export interface EmailSendResult {
   ok: boolean;
@@ -27,9 +37,49 @@ export interface EmailSendResult {
   error?: string;
 }
 
+/** Adjunto de Resend. `content` va en BASE64 (ver pdfAttachment). */
+export interface EmailAttachment {
+  filename: string;
+  content: string;
+  content_type?: string;
+}
+
 export interface EmailSendOptions {
   fromName?: string | null; // nombre del taller (display name del remitente)
   replyTo?: string | null; // shops.contact_email
+  attachments?: EmailAttachment[] | null;
+}
+
+/** Envuelve bytes de PDF como adjunto de Resend (base64). */
+export function pdfAttachment(filename: string, bytes: Uint8Array): EmailAttachment {
+  return { filename, content: encodeBase64(bytes), content_type: "application/pdf" };
+}
+
+/**
+ * Cuerpo del POST /emails. PURA (sin env ni red) para poder testearla: es el
+ * contrato exacto que ve Resend.
+ */
+export function buildResendBody(params: {
+  to: string;
+  subject: string;
+  html: string;
+  fromAddr: string;
+  fromName?: string | null;
+  replyTo?: string | null;
+  attachments?: EmailAttachment[] | null;
+}): Record<string, unknown> {
+  const fromName = (params.fromName ?? "").trim();
+  const body: Record<string, unknown> = {
+    from: fromName ? `${fromName} <${params.fromAddr}>` : params.fromAddr,
+    to: [params.to],
+    subject: params.subject,
+    html: params.html,
+  };
+  const replyTo = (params.replyTo ?? "").trim();
+  if (replyTo && EMAIL_RE.test(replyTo)) body.reply_to = replyTo;
+  const attachments = (params.attachments ?? []).filter((a) => a && a.filename && a.content);
+  if (attachments.length > 0) body.attachments = attachments;
+  return body;
 }
 
 // Mismo subdominio que usa el SMTP de Auth en el dashboard. Se puede pisar con EMAIL_FROM.
@@ -65,7 +115,12 @@ export async function sendEmail(
   }
 
   if (isDryRun()) {
-    console.log(`[email:dry-run] → ${addr} [${subject}]`);
+    const atts = opts.attachments ?? [];
+    // Los adjuntos son lo caro y lo nuevo: en sandbox se loguea cuántos y cuánto
+    // pesan (KB reales, no base64) para poder auditar el lote sin abrir la casilla.
+    const kb = atts.reduce((acc, a) => acc + Math.round((a.content.length * 3) / 4 / 1024), 0);
+    const suffix = atts.length > 0 ? ` +${atts.length} adj (~${kb} KB)` : "";
+    console.log(`[email:dry-run] → ${addr} [${subject}]${suffix}`);
     return { ok: true, dryRun: true };
   }
 
@@ -73,15 +128,15 @@ export async function sendEmail(
   try {
     const key = Deno.env.get("RESEND_API_KEY")!;
     const fromAddr = Deno.env.get("EMAIL_FROM") ?? DEFAULT_FROM;
-    const fromName = (opts.fromName ?? "").trim();
-    const body: Record<string, unknown> = {
-      from: fromName ? `${fromName} <${fromAddr}>` : fromAddr,
-      to: [addr],
+    const body = buildResendBody({
+      to: addr,
       subject,
       html,
-    };
-    const replyTo = (opts.replyTo ?? "").trim();
-    if (replyTo && EMAIL_RE.test(replyTo)) body.reply_to = replyTo;
+      fromAddr,
+      fromName: opts.fromName,
+      replyTo: opts.replyTo,
+      attachments: opts.attachments,
+    });
 
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",

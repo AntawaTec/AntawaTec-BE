@@ -12,8 +12,19 @@
 // DOS CANALES: cada evento puede encolar una fila por canal (whatsapp y/o email) y
 // el drenado bifurca por `channel`. El dedupe es por (entidad, plantilla, CANAL) —
 // índice de 0034; el onConflict de abajo es su otra mitad, no se tocan por separado.
-// Alcance del email v1: solo quote_ready y vehicle_received (los otros 4 eventos son
-// avisos cortos y siguen whatsapp-only).
+//
+// Alcance del email (lote L2, «correos de la orden»): quote_ready, vehicle_received
+// (con la ORDEN en PDF adjunta), work_in_process (email-only, sin adjunto) y
+// delivery_completed (con el RECIBO en PDF adjunto). Los tres restantes (las dos de
+// citas y vehicle_ready) siguen whatsapp-only.
+//
+// Dos reglas del drenado que solo existen por los PDFs:
+//   * HOLD de 15 min para (vehicle_received, email): la orden se crea vacía y el
+//     taller la completa después. Adjuntar el PDF en el primer tick mandaría una
+//     orden en blanco. La fila queda 'queued' sin gastar un intento.
+//   * PDF_PER_TICK: tope de PDFs por corrida. Generar+adjuntar es lo único caro de
+//     todo el pipeline y el cron corre cada minuto; lo que sobra espera al próximo
+//     tick en vez de arriesgar el timeout de la función.
 //
 // Decidido vía debate dual-Opus. service_role (createAdminClient) → puede escribir
 // notification_log (que no tiene insert policy para authenticated).
@@ -28,10 +39,29 @@ import {
   type QuoteSnapshot,
   type QuoteSnapshotSection,
 } from "../_shared/emailTemplates.ts";
-import { sendEmail } from "../_shared/emailTransport.ts";
+import { pdfAttachment, sendEmail, type EmailAttachment } from "../_shared/emailTransport.ts";
+import {
+  pdfFileName,
+  renderDeliveryReceiptPdf,
+  renderOrderPdf,
+  type LogoImage,
+} from "../_shared/orderPdf.ts";
+import { createCatalogCache, fetchLogo, loadOrderPdfSnapshot } from "../_shared/orderSnapshot.ts";
 
 const MAX_ATTEMPTS = 5;
 const DRAIN_LIMIT = 100;
+// Gracia antes de mandar la orden en PDF: el FE crea la work_order y recién
+// después guarda km, checklist, trabajos del catálogo y repuestos. 15 minutos
+// cubren una recepción normal sin que el aviso deje de ser "al momento".
+const VEHICLE_RECEIVED_EMAIL_HOLD_MS = 15 * 60_000;
+// Tope de PDFs por corrida (el cron corre cada minuto ⇒ 480/hora de techo).
+const PDF_PER_TICK = 8;
+// Qué documento adjunta cada plantilla de correo. Las que no están acá van sin
+// adjunto y no pagan ni el fetch de la orden ni el presupuesto de PDFs.
+const PDF_KIND: Record<string, "orden" | "recibo"> = {
+  vehicle_received: "orden",
+  delivery_completed: "recibo",
+};
 // Tope de ids por request en los filtros `.in(...)`: PostgREST los manda en la URL
 // y una lista larga de UUIDs la desborda. Solo importa cuando el histórico crece.
 const IN_CHUNK = 200;
@@ -326,15 +356,57 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
     enq += await enqueueMissing(admin, "vehicle_ready", "work_order",
       (data ?? []).map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
   }
+  // work_in_process: orden en curso. EMAIL-ONLY y SOLO `status = 'in_process'`, no
+  // "in_process o posterior" como vehicle_ready: es un estado TRANSITORIO y el
+  // barrido no tiene memoria del camino. Una orden que salta de quote a delivery
+  // entre dos ticks nunca estuvo "en proceso" para el cliente, y encolarle este
+  // aviso junto con "tu vehículo está listo" en el mismo minuto sería absurdo.
+  // (El histórico anterior al lanzamiento lo neutraliza el backfill de 0041.)
+  {
+    const { data } = await admin.from("work_orders").select(woSel).eq("status", "in_process");
+    const rows = (data ?? []) as Row[];
+    if (rows.length > 0) {
+      const existing = await existingByChannel(admin, "work_in_process", "work_order", rows.map((w) => w.id as string));
+      const missing = rows.filter((w) => !existing.email.has(w.id as string));
+      enq += await enqueueMissing(admin, "work_in_process", "work_order",
+        missing.map((w) => {
+          const shop = shopOf(w.shop_id);
+          return {
+            id: w.id as string,
+            shop_id: w.shop_id as string,
+            customer_id: w.customer_id as string,
+            payload: toEmailPayload(woPayload(w, shop), firstOf(w.customer as Row | Row[]), shop, null),
+          };
+        }), "email");
+    }
+  }
   // delivery_completed: orden entregada (historical). El embed 1:1 con la entrega
   // (work_order_deliveries.work_order_id es UNIQUE) trae el resumen que el taller
   // escribió al entregar; el cierre rápido lo deja NULL y el render usa su fallback.
+  // Los DOS canales: el WhatsApp lleva el resumen aplanado, el correo el recibo en
+  // PDF (que el drenado genera desde la orden fresca, no desde este payload).
   {
     const { data } = await admin.from("work_orders")
       .select(`${woSel}, delivery:work_order_deliveries(services_summary)`)
       .eq("status", "historical");
+    const rows = (data ?? []) as Row[];
     enq += await enqueueMissing(admin, "delivery_completed", "work_order",
-      (data ?? []).map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
+      rows.map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
+
+    if (rows.length > 0) {
+      const existing = await existingByChannel(admin, "delivery_completed", "work_order", rows.map((w) => w.id as string));
+      const missing = rows.filter((w) => !existing.email.has(w.id as string));
+      enq += await enqueueMissing(admin, "delivery_completed", "work_order",
+        missing.map((w) => {
+          const shop = shopOf(w.shop_id);
+          return {
+            id: w.id as string,
+            shop_id: w.shop_id as string,
+            customer_id: w.customer_id as string,
+            payload: toEmailPayload(woPayload(w, shop), firstOf(w.customer as Row | Row[]), shop, null),
+          };
+        }), "email");
+    }
   }
   // appointment_confirmed: cita originada en una cotización.
   {
@@ -394,52 +466,168 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
 // ---------------------------------------------------------------------------
 // Drenado
 // ---------------------------------------------------------------------------
-async function drain(admin: ReturnType<typeof createAdminClient>): Promise<{ sent: number; failed: number }> {
+async function drain(
+  admin: ReturnType<typeof createAdminClient>,
+): Promise<{ sent: number; failed: number; held: number; deferred: number }> {
   const { data, error } = await admin
     .from("notification_log")
-    .select("id, template, channel, payload, attempts, status")
+    // created_at es parte del HOLD (no solo del orden) y shop_id /
+    // related_entity_id son la ruta del PDF en storage y la orden a releer.
+    .select(
+      "id, template, channel, payload, attempts, status, created_at, related_entity_type, related_entity_id, shop_id",
+    )
     .or(`status.eq.queued,and(status.eq.failed,attempts.lt.${MAX_ATTEMPTS})`)
     .order("created_at", { ascending: true })
     .limit(DRAIN_LIMIT);
   if (error) throw error;
 
-  let sent = 0, failed = 0;
+  let sent = 0, failed = 0, held = 0, deferred = 0;
+  // Presupuesto de PDFs y caches de la CORRIDA (el catálogo son ~250 filas
+  // globales; el logo, un GET por taller en vez de uno por correo).
+  let pdfBudget = PDF_PER_TICK;
+  const catalogCache = createCatalogCache();
+  const logoCache = new Map<string, LogoImage | null>();
+
   for (const row of data ?? []) {
+    const template = row.template as string;
+    const channel = row.channel as string;
     const attempts = (row.attempts as number) + 1;
+
+    // HOLD del correo de recepción. No es un intento fallido sino un "todavía
+    // no": la fila queda 'queued' con sus `attempts` intactos y el próximo tick
+    // la vuelve a mirar.
+    if (channel === "email" && template === "vehicle_received") {
+      const born = Date.parse((row.created_at as string) ?? "");
+      if (Number.isFinite(born) && Date.now() - born < VEHICLE_RECEIVED_EMAIL_HOLD_MS) {
+        held++;
+        continue;
+      }
+    }
+
     let res: { ok: boolean; dryRun: boolean; error?: string; messageId?: string };
     // Lo que queda en payload.rendered: el texto del WhatsApp o el SUBJECT del
     // correo (no el HTML — es reproducible desde el snapshot y no vale inflar la
     // fila del log con 6 KB de tablas).
     let rendered: string | undefined;
+    // Rastro de auditoría del PDF (se funde en el payload al marcar 'sent').
+    const extra: Record<string, unknown> = {};
+    // Archivado diferido: solo se sube DESPUÉS de que el correo salió bien.
+    let archive: { bytes: Uint8Array; kind: "orden" | "recibo"; workOrderId: string } | null = null;
 
-    if ((row.channel as string) === "email") {
+    if (channel === "email") {
       const payload = (row.payload ?? {}) as EmailPayload;
-      const mail = renderEmail(row.template as string, payload);
+      const mail = renderEmail(template, payload);
       if (!mail) {
-        res = { ok: false, dryRun: true, error: `plantilla sin correo: ${row.template}` };
+        res = { ok: false, dryRun: true, error: `plantilla sin correo: ${template}` };
       } else {
         rendered = mail.subject;
+        let attachments: EmailAttachment[] | undefined;
+        const kind = PDF_KIND[template];
+        // El PDF solo se paga si hay a quién mandárselo: sin destinatario la
+        // fila va a fallar igual en sendEmail ("cliente sin email"), y generar
+        // el documento sería quemar el presupuesto del tick para nada.
+        if (kind && payload.email) {
+          if (pdfBudget <= 0) {
+            deferred++;
+            continue; // sigue 'queued', sin gastar intento: se va al próximo tick
+          }
+          pdfBudget--;
+          const orderId = row.related_entity_id as string;
+          // El PDF falla POR FILA, nunca por corrida: una excepción acá
+          // (lectura rota, documento imposible) sin este try tumbaría el drenado
+          // ENTERO y dejaría el pipeline parado para todos los talleres. Con él,
+          // la fila va a 'failed' y el reintento normal (attempts < 5) la
+          // vuelve a intentar.
+          let pdfError: string | null = null;
+          try {
+            // Orden FRESCA, no el snapshot del payload: estos documentos son el
+            // acta de la orden, no el aviso (ver _shared/orderSnapshot.ts).
+            const snap = await loadOrderPdfSnapshot(admin, orderId, catalogCache);
+            if (!snap) {
+              pdfError = "orden no encontrada";
+            } else if (kind === "recibo" && !snap.delivery) {
+              // Cierre rápido sin fila de entrega: no hay nada que certificar.
+              // El correo sale igual, sin adjunto y con la marca en el payload.
+              extra.pdf_skipped = "la orden no tiene entrega registrada";
+            } else {
+              const logoUrl = snap.shop.logo_url ?? null;
+              let logo: LogoImage | null = null;
+              if (logoUrl) {
+                if (!logoCache.has(logoUrl)) logoCache.set(logoUrl, await fetchLogo(logoUrl));
+                logo = logoCache.get(logoUrl) ?? null;
+                // Bandera explícita: el taller subió un logo pero no se pudo
+                // embeber (webp, 404, timeout). Sin esto, "el PDF salió sin logo"
+                // sería indistinguible de "el taller no tiene logo".
+                if (!logo) extra.logo_skipped = true;
+              }
+              const bytes = kind === "recibo"
+                ? await renderDeliveryReceiptPdf(snap, logo)
+                : await renderOrderPdf(snap, logo);
+              attachments = [pdfAttachment(pdfFileName(kind, snap.order.order_number), bytes)];
+              extra.pdf_bytes = bytes.length;
+              archive = { bytes, kind, workOrderId: orderId };
+            }
+          } catch (e) {
+            pdfError = `no pude generar el PDF: ${e instanceof Error ? e.message : String(e)}`;
+          }
+          if (pdfError) {
+            console.error(`notification-dispatch: PDF de ${orderId}: ${pdfError}`);
+            await admin.from("notification_log")
+              .update({ status: "failed", attempts, error: pdfError })
+              .eq("id", row.id as string);
+            failed++;
+            continue;
+          }
+        }
         res = await sendEmail(payload.email ?? null, mail.subject, mail.html, {
           fromName: payload.shop_name ?? "AntawaTec",
           replyTo: payload.contact_email ?? null,
+          attachments,
         });
       }
     } else {
       const payload = (row.payload ?? {}) as NotificationPayload & { whatsapp_number?: string | null };
-      const out = renderTemplate(row.template as string, payload);
+      const out = renderTemplate(template, payload);
       if (!out) {
-        res = { ok: false, dryRun: true, error: `plantilla desconocida: ${row.template}` };
+        res = { ok: false, dryRun: true, error: `plantilla desconocida: ${template}` };
       } else {
         rendered = out.text;
-        res = await sendWhatsApp(payload.whatsapp_number ?? null, row.template as string, out);
+        res = await sendWhatsApp(payload.whatsapp_number ?? null, template, out);
       }
     }
 
     if (res.ok) {
+      // Archivado en el bucket privado `pdfs` ({shop_id}/orders/{id}/…). El
+      // correo YA salió: un fallo acá NO puede tocar `status` (marcar 'failed'
+      // reenviaría el mensaje en el próximo tick, con el cliente recibiéndolo
+      // dos veces). Queda en el log y en payload.pdf_upload_error.
+      if (archive) {
+        const path = `${row.shop_id as string}/orders/${archive.workOrderId}/${archive.kind}.pdf`;
+        try {
+          const { error: upErr } = await admin.storage
+            .from("pdfs")
+            .upload(path, archive.bytes, { contentType: "application/pdf", upsert: true });
+          if (upErr) throw upErr;
+          extra.pdf_path = path;
+          if (archive.kind === "recibo") {
+            // work_order_deliveries.delivery_pdf_url existe desde 0007 y nadie
+            // la escribía: este es su primer escritor.
+            const { error: dErr } = await admin
+              .from("work_order_deliveries")
+              .update({ delivery_pdf_url: path })
+              .eq("work_order_id", archive.workOrderId);
+            if (dErr) throw dErr;
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.warn(`notification-dispatch: no pude archivar ${path}: ${msg}`);
+          extra.pdf_upload_error = msg;
+        }
+      }
       const payload = (row.payload ?? {}) as Record<string, unknown>;
       await admin.from("notification_log").update({
         status: "sent", sent_at: new Date().toISOString(), attempts,
-        payload: { ...payload, rendered, dry_run: res.dryRun },
+        payload: { ...payload, rendered, dry_run: res.dryRun, ...extra },
         // wamid de la Cloud API: sin él, el webhook de estados (0038) no puede
         // correlacionar el recibo con esta fila. Solo el canal WhatsApp real lo trae.
         ...(res.messageId ? { provider_message_id: res.messageId, provider_status: "accepted" } : {}),
@@ -451,7 +639,7 @@ async function drain(admin: ReturnType<typeof createAdminClient>): Promise<{ sen
       failed++;
     }
   }
-  return { sent, failed };
+  return { sent, failed, held, deferred };
 }
 
 Deno.serve(async (req: Request) => {
@@ -467,8 +655,11 @@ Deno.serve(async (req: Request) => {
   try {
     const admin = createAdminClient();
     const enqueued = await sweep(admin);
-    const { sent, failed } = await drain(admin);
-    return ok({ enqueued, sent, failed });
+    const { sent, failed, held, deferred } = await drain(admin);
+    // `held` (esperando el HOLD de 15 min) y `deferred` (fuera del presupuesto de
+    // PDFs del tick) salen en la respuesta: sin ellos, un operador que invoca a
+    // mano vería "0 enviados" y no sabría si el pipeline está trabado o esperando.
+    return ok({ enqueued, sent, failed, held, deferred });
   } catch (e) {
     const msg = e instanceof Error ? e.message
       : (e && typeof e === "object") ? JSON.stringify(e)

@@ -38,6 +38,7 @@
 | Publicar la app `1003852111528931` (sale de modo desarrollo) | ⛔ pendiente — falta URL de política de privacidad (va a `antwt.com`) |
 | Envío REAL de WhatsApp (token + Phone Number ID) | ⛔ pendiente: System User + token + secrets |
 | Canal email (Resend): render + transporte + encolado | ✅ construido 2026-08 (dry-run por defecto) |
+| Correos de la orden con PDF adjunto (`vehicle_received` + `work_in_process` + `delivery_completed`) | ✅ construido 2026-09 (lote L2) — deploy con ventana, ver [`order-emails-deploy.md`](./order-emails-deploy.md) |
 | Proveedor alternativo **Twilio** (transporte + `twilio-status-webhook`) | ✅ construido 2026-09, apagado por default (`WHATSAPP_PROVIDER=meta`) — falta registrar el sender y re-crear las 6 plantillas, ver [`whatsapp-twilio-setup.md`](./whatsapp-twilio-setup.md) |
 | Envío REAL de email (`RESEND_API_KEY` + `EMAIL_DRY_RUN=false`) | ✅ encendido 2026-08-19; **funcionando recién desde 2026-08-28** (hasta entonces todo fallaba con 403 por el remitente en el apex, ver «Remitente») |
 
@@ -258,14 +259,41 @@ Segundo canal del mismo pipeline: mismo barrido, mismo `notification_log`, mismo
 reintento. Lo que cambia es el render (`_shared/emailTemplates.ts`) y el transporte
 (`_shared/emailTransport.ts`).
 
-**Alcance v1 — solo dos eventos.** El correo existe para llevar lo que el WhatsApp no
-puede: el **desglose con precios**. Los otros 4 eventos son avisos cortos y siguen
-whatsapp-only (`renderEmail()` devuelve `null` para ellos).
+**Alcance — cuatro eventos** (los dos primeros desde 2026-08; los dos con PDF, desde
+el lote L2). El correo existe para llevar lo que el WhatsApp no puede: el **desglose
+con precios** y los **documentos adjuntos**. Los tres restantes (las dos de citas y
+`vehicle_ready`) son avisos cortos y siguen whatsapp-only (`renderEmail()` devuelve
+`null` para ellos).
 
 | Evento | Asunto | Contenido |
 |---|---|---|
 | `quote_ready` | `Cotización N° 0042 — <taller>` | Encabezado con logo/nombre/dirección/teléfono del taller, vehículo, una tabla por sección (`Mantenimiento y Reparación` / `Enderezada y Pintura`) con ítems, cantidad, precio unitario y total de línea, y el bloque subtotal / IVA / total. |
-| `vehicle_received` | `Recibimos tu vehículo — <taller>` | Confirmación de recepción. Si la orden nace de una cotización (`work_orders.quote_id`), suma el desglose de los trabajos acordados; si no, es solo el acuse. |
+| `vehicle_received` | `Recibimos tu vehículo — <taller>` | Confirmación de recepción + **ORDEN DE TRABAJO EN PDF ADJUNTA** (`OT-0042-orden.pdf`). Si la orden nace de una cotización (`work_orders.quote_id`), suma el desglose de los trabajos acordados. Sale **15 min después** de crearse la orden (HOLD, ver abajo). |
+| `work_in_process` | `Tu vehículo está en proceso — <taller>` | Aviso corto de que el trabajo arrancó. **EMAIL-ONLY** (no hay plantilla de WhatsApp) y **sin adjunto**. |
+| `delivery_completed` | `Recibo de entrega — <taller>` | **RECIBO DE ENTREGA EN PDF ADJUNTO** (`OT-0042-recibo.pdf`) + el resumen de trabajos como lista. |
+
+**Los adjuntos.** Se generan server-side con `npm:pdf-lib` (`_shared/orderPdf.ts`)
+leyendo la orden **fresca** de la base (`_shared/orderSnapshot.ts`), no el snapshot
+del payload: estos documentos son el ACTA de la orden, no el aviso. Son el espejo
+exacto de las vistas imprimibles del FE (`OrderPrintView` / `DeliveryReceiptView`) —
+cambiar el texto de una obliga a cambiar la otra. De ahí dos reglas del drenado:
+
+- **HOLD de 15 min** para `(vehicle_received, email)`: la orden se crea vacía y el
+  taller carga km, checklist, trabajos y repuestos después. La fila espera en
+  `queued` **sin consumir intentos**.
+- **`PDF_PER_TICK`**: tope de PDFs por corrida del cron; lo que sobra queda `queued`
+  para el próximo tick. La respuesta de la función trae `held` y `deferred` para
+  distinguir "esperando" de "trabado".
+
+El PDF además se archiva (best-effort) en el bucket privado `pdfs` bajo
+`{shop_id}/orders/{work_order_id}/`, y el recibo escribe
+`work_order_deliveries.delivery_pdf_url`. **Un fallo del archivado NUNCA cambia
+`status`** (marcar `failed` reenviaría un correo ya entregado).
+
+⚠️ **Estrenar un par (plantilla, canal) exige backfill.** El barrido es
+state-driven y sin ventana temporal: sin filas sembradas, el primer tick le manda el
+evento a TODO el histórico. Ver `supabase/migrations/0041_*.sql` y el runbook
+[`order-emails-deploy.md`](./order-emails-deploy.md).
 
 **Remitente y respuestas.** El dominio verificado en Resend es uno solo y es el
 **subdominio `mail.antwt.com`** (el apex `antwt.com` **no** está verificado — es el mismo
@@ -380,6 +408,7 @@ valida y guarda ya normalizado, así que el problema no vuelve a entrar por el a
 
 ## Diferido (no bloquea el envío)
 - **Webhook de estado de Meta** (delivered → `read`) + valor `read` en el enum.
-- Email para los otros 4 eventos (hoy whatsapp-only por diseño).
-- PDF adjunto en el correo de cotización (hoy va el desglose en HTML).
+- Email para los 3 eventos restantes (citas × 2 y `vehicle_ready`): whatsapp-only por diseño.
+- PDF adjunto en el correo de **cotización** (hoy va el desglose en HTML; la
+  maquinaria de adjuntos ya existe desde el lote L2, falta el renderer).
 - Re-enviar una cotización ya enviada (bloqueado por el dedupe; ver "Canal email").
