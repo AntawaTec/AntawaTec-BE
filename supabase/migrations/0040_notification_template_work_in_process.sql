@@ -1,0 +1,21 @@
+-- =============================================================================
+-- 0040_notification_template_work_in_process.sql
+-- Séptimo valor del enum `notification_template`: `work_in_process`.
+--
+-- Es el aviso de "ya estamos trabajando en tu vehículo" del lote L2 (correos de
+-- la orden). Nace EMAIL-ONLY a propósito: registrar una plantilla más en
+-- Meta/Twilio cuesta una aprobación y una conversación cobrada por un aviso que
+-- el correo ya cubre mejor. `_shared/notificationTemplates.ts` lo excluye
+-- explícitamente del mapa de renderers de WhatsApp.
+--
+-- ⚠️ MIGRACIÓN DE UNA SOLA LÍNEA A PROPÓSITO (convención del repo, ver 0016):
+-- Supabase envuelve cada archivo de migración en UNA transacción, y Postgres no
+-- deja USAR un valor de enum en la misma transacción que lo agrega. El backfill
+-- que sí lo referencia vive en 0041, que es otro archivo y por lo tanto otra
+-- transacción. No agregar NADA más acá.
+--
+-- Sin riesgo sobre datos existentes: agregar un valor al enum no toca ninguna
+-- fila. El riesgo real del lote está en 0041 (ver su cabecera).
+-- =============================================================================
+
+alter type public.notification_template add value if not exists 'work_in_process';
