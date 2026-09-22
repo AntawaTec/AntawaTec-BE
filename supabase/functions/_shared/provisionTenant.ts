@@ -36,7 +36,7 @@ import { findAuthUserByEmail, isAlreadyRegistered } from "./authAdmin.ts";
 
 // --- Tipos públicos ----------------------------------------------------------
 
-export type ProvisionProvider = "hotmart" | "bank_transfer";
+export type ProvisionProvider = "hotmart" | "bank_transfer" | "payphone";
 
 export interface ProvisionTenantInput {
   /** Razón social del taller -> shops.name y base del slug. */

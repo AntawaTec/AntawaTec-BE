@@ -133,9 +133,13 @@ PWA; no vale firmar cada render): lectura pública sin signed URL, escritura ais
 **Solo contenido raster** (`png/jpeg/webp`, **sin SVG** → XSS en el render cross-tenant del admin).
 
 ## Provisioning / embudo de ventas
-Landing → (Hotmart webhook **o** transferencia con aprobación de admin) → creación
-**idempotente** del tenant → email con magic link. `webhook_events` (con
-`unique(provider, external_id)`) deduplica webhooks que se disparan dos veces.
+Landing → (Hotmart webhook **o** transferencia con aprobación de admin **o** tarjeta
+vía Payphone) → creación **idempotente** del tenant → email con magic link.
+`webhook_events` (con `unique(provider, external_id)`) deduplica webhooks que se
+disparan dos veces. La vía de tarjeta (`payphone-prepare` → `payphone-confirm`,
+`card_payment_intents` en `0037`) es la única con estado propio: el Confirm de
+Payphone es obligatorio en < 5 min, no es idempotente y es la única fuente de verdad
+del cobro.
 
 ## Notificaciones
 WhatsApp Cloud API (Meta, oficial) primario; Resend como fallback de email. 6
@@ -247,6 +251,19 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   jamás cuentas sin él (no secuestrar owners del funnel). Sin migración: todo corre con
   service_role sobre el esquema de `0020`–`0022`. El template de invite pasó a copy neutro
   (lo comparten dueño y técnico); replicarlo a mano en el Dashboard hosted al deployar.
+
+- `[2026-08]` Pago con **tarjeta** (Payphone, botón por redirección): `card_payment_intents`
+  (`0037`) guarda el intento porque el retorno de Payphone NO trae taller ni email, y su
+  `id` uuid ES el `clientTransactionId`. El Confirm de Payphone no es idempotente y
+  reversa el cobro si no se llama en 5 min, así que el lock que garantiza "una sola
+  llamada" es una RPC **atómica** (`acquire_card_payment_intent`: CTE `as materialized`
+  con `for update` + UPDATE en UNA sentencia, devolviendo el estado ANTERIOR) y no un
+  select+update desde la función. Estado `confirmed` = cobro real ya persistido: desde
+  ahí un reintento salta el Confirm y solo reintenta el provisioning, para que ningún
+  fallo pierda un pago. Un `confirming` de más de 60 s se considera abandonado y se
+  re-adquiere. La RPC es `security definer`: hubo que **revocar EXECUTE a anon y
+  authenticated explícitamente** — Supabase se lo concede por default privileges y un
+  `revoke from public` no alcanza (verificado con `has_function_privilege`).
 
 - `[2026-09]` **Twilio como proveedor alternativo de WhatsApp** (`WHATSAPP_PROVIDER`,
   default `meta`): Meta factura contra la tarjeta de la WABA y el cobro rebotado dejó el
