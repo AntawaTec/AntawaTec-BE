@@ -115,6 +115,21 @@ ver log) + tabla interna `private.shop_quote_counters`; `shops.logo_url`/`addres
 (texto libre); `work_orders.quote_id` (FK compuesto de tenancy); unique parcial
 `appointments.quote_id` (1:1 cita↔cotización).
 
+### Catálogo de trabajos (`0025`/`0026`/`0030`/`0031`/`0035`/`0039`)
+Reemplaza el checklist manual de Zoho. Árbol **GLOBAL** `catalog_items` (módulos
+`mantenimiento` / `reparacion` / `enderezada_pintura`; nodos `boolean` o `enum_select`,
+self-FK compuesto `(parent_id, module)`, seed con UUIDs deterministas) + selecciones por
+orden en `work_order_catalog_selections` (FK compuesto `(work_order_id, shop_id)`, `notes`
+por nodo). Lectura para cualquier `authenticated`; **nadie edita el árbol desde la app**
+(se siembra por migración / service_role). El técnico puede **escribir** las selecciones de
+SUS órdenes (`0030`, aditivo).
+`work_order_module_comments` (`0039`) agrega el **comentario libre por módulo** dentro de la
+orden: una fila por `(work_order_id, module)` — un textarea, no un hilo — para lo que no está
+en el menú y para importar los `Comentarios_Mantenimientos1` / `Comentarios_Reparaciones` de
+Zoho 1:1. El FE lo muestra en el resumen como `  Comentarios: …` bajo los trabajos de ese
+módulo. Mismo patrón de tenancy (FK compuesto + `apply_tenant_rls`) y mismo carve-out de
+técnico que las selecciones.
+
 ## Los 11 módulos
 10 operativos (PWA del dueño) + Admin Dashboard (web, Antawa):
 Vehicle Data · Customer Data · Quotation · Appointments · Work Order ·
@@ -134,9 +149,13 @@ PWA; no vale firmar cada render): lectura pública sin signed URL, escritura ais
 **Solo contenido raster** (`png/jpeg/webp`, **sin SVG** → XSS en el render cross-tenant del admin).
 
 ## Provisioning / embudo de ventas
-Landing → (Hotmart webhook **o** transferencia con aprobación de admin) → creación
-**idempotente** del tenant → email con magic link. `webhook_events` (con
-`unique(provider, external_id)`) deduplica webhooks que se disparan dos veces.
+Landing → (Hotmart webhook **o** transferencia con aprobación de admin **o** tarjeta
+vía Payphone) → creación **idempotente** del tenant → email con magic link.
+`webhook_events` (con `unique(provider, external_id)`) deduplica webhooks que se
+disparan dos veces. La vía de tarjeta (`payphone-prepare` → `payphone-confirm`,
+`card_payment_intents` en `0037`) es la única con estado propio: el Confirm de
+Payphone es obligatorio en < 5 min, no es idempotente y es la única fuente de verdad
+del cobro.
 
 ## Notificaciones
 WhatsApp Cloud API (Meta, oficial) primario; Resend para el email. **7 plantillas**
@@ -290,6 +309,19 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   service_role sobre el esquema de `0020`–`0022`. El template de invite pasó a copy neutro
   (lo comparten dueño y técnico); replicarlo a mano en el Dashboard hosted al deployar.
 
+- `[2026-08]` Pago con **tarjeta** (Payphone, botón por redirección): `card_payment_intents`
+  (`0037`) guarda el intento porque el retorno de Payphone NO trae taller ni email, y su
+  `id` uuid ES el `clientTransactionId`. El Confirm de Payphone no es idempotente y
+  reversa el cobro si no se llama en 5 min, así que el lock que garantiza "una sola
+  llamada" es una RPC **atómica** (`acquire_card_payment_intent`: CTE `as materialized`
+  con `for update` + UPDATE en UNA sentencia, devolviendo el estado ANTERIOR) y no un
+  select+update desde la función. Estado `confirmed` = cobro real ya persistido: desde
+  ahí un reintento salta el Confirm y solo reintenta el provisioning, para que ningún
+  fallo pierda un pago. Un `confirming` de más de 60 s se considera abandonado y se
+  re-adquiere. La RPC es `security definer`: hubo que **revocar EXECUTE a anon y
+  authenticated explícitamente** — Supabase se lo concede por default privileges y un
+  `revoke from public` no alcanza (verificado con `has_function_privilege`).
+
 - `[2026-09]` **Correos de la orden con PDF adjunto (lote L2).** Tres decisiones y
   una trampa. (a) El PDF se genera SERVER-SIDE con `npm:pdf-lib` y desde la orden
   **fresca**, no desde el snapshot del payload: la regla de "congelar lo enviado"
@@ -323,6 +355,16 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   ENTREGA no toca `status`; rank que nunca retrocede) tienen que valer igual para los dos
   webhooks. Firma de Twilio = HMAC-SHA1 sobre `url + params ordenados`, así que la URL
   pública tiene que ser **idéntica** a la registrada (`TWILIO_STATUS_CALLBACK_URL`).
+
+- `[2026-09]` `work_order_module_comments` (`0039`) **revierte** la decisión de `0025` de no
+  modelar el comentario general por módulo de Zoho ("vive en las notas de la orden/bitácora").
+  Dos razones: producto lo pidió con forma propia (un textarea por menú, no una entrada más en
+  la bitácora cronológica) y la migración de Zoho trae >1.000 comentarios libres por módulo que
+  el importador no tenía dónde poner sin aplastarlos en un campo. Una fila por
+  `(work_order_id, module)`, unique con **nombre explícito** (el FE traduce el 23505 y hace
+  upsert con ese `onConflict`), `check` de no-vacío porque "sin comentario" = **borrar la fila**
+  (si no, el resumen imprime un "Comentarios:" colgando). El técnico obtiene las 4 operaciones
+  (no solo SELECT): es el mismo bloque de UI que los trabajos que ya puede editar desde `0030`.
 
 ## Qué evitar
 - No editar migraciones ya aplicadas.

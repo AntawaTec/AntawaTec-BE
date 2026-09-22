@@ -32,6 +32,7 @@ import {
   serverError,
   tooManyRequests,
 } from "../_shared/response.ts";
+import { validateBusinessName, validateEmail } from "../_shared/prospect.ts";
 
 const BUCKET = "payment-proofs";
 
@@ -50,10 +51,9 @@ const MIME_EXT = new Map<string, string>([
 ]);
 
 const MAX_PENDING_PER_EMAIL = 3;
-const MAX_BUSINESS_NAME = 120;
-const MAX_EMAIL = 254;
 const MAX_AMOUNT = 99999.99;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// businessName (1–120) y email (≤254 + regex) se validan con _shared/prospect.ts,
+// compartido con payphone-prepare: mismos límites y MISMOS mensajes de error.
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return preflight();
@@ -93,17 +93,13 @@ Deno.serve(async (req) => {
   }
 
   // --- Validación server-side (la landing valida lo mismo, pero acá manda) ---
-  const businessNameRaw = form.get("businessName");
-  const businessName = typeof businessNameRaw === "string" ? businessNameRaw.trim() : "";
-  if (!businessName || businessName.length > MAX_BUSINESS_NAME) {
-    return badRequest("businessName es obligatorio (1–120 caracteres).");
-  }
+  const businessNameCheck = validateBusinessName(form.get("businessName"));
+  if (!businessNameCheck.ok) return badRequest(businessNameCheck.message);
+  const businessName = businessNameCheck.value;
 
-  const emailRaw = form.get("email");
-  const email = typeof emailRaw === "string" ? emailRaw.trim().toLowerCase() : "";
-  if (!email || email.length > MAX_EMAIL || !EMAIL_RE.test(email)) {
-    return badRequest("email es obligatorio y debe ser una dirección válida.");
-  }
+  const emailCheck = validateEmail(form.get("email"));
+  if (!emailCheck.ok) return badRequest(emailCheck.message);
+  const email = emailCheck.value;
 
   const amountRaw = form.get("amount");
   let amount: number | null = null;
