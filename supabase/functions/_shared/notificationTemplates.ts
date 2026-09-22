@@ -1,6 +1,14 @@
 // =============================================================================
 // _shared/notificationTemplates.ts
-// Render de las 6 plantillas de notificación. PURO (sin I/O) → fácil de testear.
+// Render de las plantillas de WhatsApp. PURO (sin I/O) → fácil de testear.
+//
+// El enum `notification_template` de la DB tiene 7 valores, pero WhatsApp solo
+// renderiza 6: `work_in_process` (lote L2) es **email-only** por decisión de
+// producto — registrar una 7ª plantilla en Meta/Twilio cuesta una aprobación y
+// una conversación cobrada por un aviso que el correo ya cubre mejor (y que
+// además lleva adjunto). Por eso el tipo lista los 7 y RENDERERS excluye ese uno
+// EXPLÍCITAMENTE (`Exclude<...>`): si mañana se suma la plantilla de WhatsApp, el
+// compilador obliga a escribir el renderer en vez de degradar en silencio.
 //
 // renderTemplate devuelve DOS formas a propósito:
 //   - text:       string renderizado para el modo SANDBOX / dry-run / preview.
@@ -16,9 +24,13 @@ export type NotificationTemplate =
   | "appointment_confirmed"
   | "appointment_reminder_24h"
   | "vehicle_received"
+  | "work_in_process"
   | "quote_ready"
   | "vehicle_ready"
   | "delivery_completed";
+
+/** Las que SÍ tienen plantilla registrada en el proveedor de WhatsApp. */
+export type WhatsAppTemplate = Exclude<NotificationTemplate, "work_in_process">;
 
 // Snapshot de datos que el barrido guarda en notification_log.payload al encolar.
 // Todo lo que el render necesita viaja acá: renderizar es puro y reproducible aun
@@ -161,7 +173,7 @@ const AVISO =
 //      falta texto real después → de ahí el AVISO fijo al cierre de las 6.
 //   3. los PARÁMETROS no pueden llevar saltos de línea, tabs ni 4+ espacios (el
 //      cuerpo fijo sí puede ser multilínea) → de ahí collapseParam() en todos.
-const RENDERERS: Record<NotificationTemplate, (p: NotificationPayload) => RenderedNotification> = {
+const RENDERERS: Record<WhatsAppTemplate, (p: NotificationPayload) => RenderedNotification> = {
   appointment_confirmed: (p) => {
     const name = customerName(p);
     const veh = vehicleLabel(p);
@@ -240,7 +252,7 @@ export function renderTemplate(
   template: string,
   payload: NotificationPayload,
 ): RenderedNotification | null {
-  const fn = RENDERERS[template as NotificationTemplate];
+  const fn = RENDERERS[template as WhatsAppTemplate];
   if (!fn) return null;
   return fn(payload);
 }
