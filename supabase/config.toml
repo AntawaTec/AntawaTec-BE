@@ -424,6 +424,17 @@ verify_jwt = false
 [functions.bank-transfer-intake]
 verify_jwt = false
 
+# subscription-renewal-approval: la gemela de bank-transfer-approval para las
+# RENOVACIONES mensuales (aquella da de ALTA un taller, esta EXTIENDE la
+# suscripción de uno que ya existe). Mismo racional para verify_jwt = false: el
+# preflight OPTIONS que manda el navegador NO lleva header Authorization y con
+# verify_jwt = true el gateway lo rechazaría con 401, rompiendo el CORS. La auth
+# REAL (JWT validado contra GoTrue + rol = antawa_admin, vía
+# _shared/requireAdmin.ts) se hace DENTRO de la función, que es más fuerte (el
+# gateway solo confirma "hay un JWT", no que sea admin).
+[functions.subscription-renewal-approval]
+verify_jwt = false
+
 # technician-access: la invoca el DUEÑO del taller desde el navegador (alta y
 # revocación del login de un técnico). verify_jwt = false por el mismo racional
 # que bank-transfer-approval: el preflight OPTIONS del navegador no lleva
