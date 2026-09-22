@@ -140,8 +140,10 @@ Essential Reports (vistas/consultas) · **Admin Dashboard** (cross-shop).
 Buckets **privados** (`vehicle-media`, `signatures`, `documents`, `pdfs`,
 `payment-proofs`). Convención de ruta: **`{shop_id}/...`** — las políticas verifican
 `(storage.foldername(name))[1] = current_shop_id()`. Servir archivos con signed URLs.
-`payment-proofs` es especial: lo escribe una Edge Function (service role) antes de
-existir el tenant; solo admin lee.
+`payment-proofs` es especial: el ALTA la escribe una Edge Function (service role) en
+`intake/{proofId}/` antes de existir el tenant y solo la lee el admin; desde `0043` el
+dueño además escribe y lee su propia subcarpeta `{shop_id}/renewals/…` (comprobantes de
+renovación), sin ver los de nadie más.
 
 `shop-logos` (`0014`) es el ÚNICO bucket **público** (el logo va en cotizaciones impresas /
 PWA; no vale firmar cada render): lectura pública sin signed URL, escritura aislada por
@@ -156,6 +158,20 @@ disparan dos veces. La vía de tarjeta (`payphone-prepare` → `payphone-confirm
 `card_payment_intents` en `0037`) es la única con estado propio: el Confirm de
 Payphone es obligatorio en < 5 min, no es idempotente y es la única fuente de verdad
 del cobro.
+
+**Renovación mensual por transferencia** (`0042`/`0043`, del mes 2 en adelante):
+`bank_transfer_proofs` distingue `kind = 'signup' | 'renewal'`. El ALTA la escribe
+`bank-transfer-intake` con service_role (prospecto anónimo, todavía no hay taller);
+la RENOVACIÓN la escribe el **dueño** bajo RLS (policies aditivas `btp_owner_*`,
+uno pendiente por taller) y sube el archivo a `payment-proofs` bajo
+`{shop_id}/renewals/…`. El admin resuelve con la Edge Function
+`subscription-renewal-approval`, que extiende `subscriptions.current_period_end`
+**un mes calendario** y espeja `shops.status/subscription_status`. La idempotencia
+no la da un lock: `period_end` se escribe en el MISMO update condicional que marca
+`approved`, y todo lo demás se calcula desde ese valor guardado → aprobar dos veces
+nunca suma dos meses. Procedimientos (alta de un `antawa_admin` + el flujo entero)
+en `docs/admin-onboarding.md`. **No hay corte automático por vencimiento en V1**:
+suspender sigue siendo manual.
 
 ## Notificaciones
 WhatsApp Cloud API (Meta, oficial) primario; Resend para el email. **7 plantillas**
@@ -234,6 +250,11 @@ Ver `supabase/migrations/0041_*.sql` y el runbook `docs/order-emails-deploy.md`.
 - Una responsabilidad por función; utilidades compartidas en `_shared/`.
 - Funciones planeadas: `hotmart-webhook`, `bank-transfer-approval`, `provision-tenant`,
   `whatsapp-dispatch`, `notification-retry`, `appointment-reminders`.
+- `subscription-renewal-approval`: gemela de `bank-transfer-approval` para las
+  RENOVACIONES (aquella da de ALTA un taller, esta extiende la suscripción de uno que
+  ya existe). La verificación "el caller es antawa_admin" es compartida por ambas en
+  `_shared/requireAdmin.ts`; la aritmética del período vive PURA en
+  `_shared/subscriptionPeriod.ts` (con tests).
 - `technician-access`: alta (invite por email / contraseña temporal) y revocación del
   login de un técnico, invocada por el owner desde la PWA. Auth in-code (JWT + rol
   shop_owner + tenancy del técnico); re-entrante con marker en `user_metadata`.
@@ -366,6 +387,25 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   (si no, el resumen imprime un "Comentarios:" colgando). El técnico obtiene las 4 operaciones
   (no solo SELECT): es el mismo bloque de UI que los trabajos que ya puede editar desde `0030`.
 
+- `[2026-09]` **Renovación mensual por transferencia** (`0042`/`0043` +
+  `subscription-renewal-approval`). Se reusó `bank_transfer_proofs` con una columna
+  `kind` en vez de crear una tabla nueva: ya era el comprobante con su ciclo
+  pending→approved/rejected, su bucket y su pantalla de admin; duplicarla habría
+  duplicado el admin. Tres decisiones que importan: (a) el mes es **calendario con clamp
+  de fin de mes** (31-ene → 28/29-feb) y no 30 días, porque con 30 días el vencimiento se
+  corre hacia atrás y el taller termina pagando el 26 algo que empezó el 1; (b) la
+  idempotencia NO es un lock ni una RPC atómica sino un **ancla de datos**: `period_end`
+  se escribe en el MISMO `update … where status = 'pending'` que aprueba, y todo lo
+  posterior se calcula desde ese valor guardado y se escribe absoluto — aprobar dos veces
+  converge en vez de sumar dos meses; (c) **Edge Function y no RPC** `security definer`:
+  tras la lección de `0037` (Supabase le da EXECUTE a `anon`/`authenticated` por default
+  privileges y hay que revocarlo a mano) no se agrega superficie SQL invocable si el
+  borde ya es el gateway + rol admin. El dueño escribe su propio comprobante bajo RLS
+  (primera escritura de un dueño en una tabla de plataforma): el `WITH CHECK` le fija
+  `status`, `kind`, `shop_id` y deja `period_*`/`validated_*` nulos, y un unique parcial
+  le permite UN pendiente. En storage, la policy SELECT del dueño va sí o sí (lección
+  `0028`): sin ella el upsert falla y no puede firmar su propio archivo.
+
 ## Qué evitar
 - No editar migraciones ya aplicadas.
 - No desactivar RLS "para que funcione rápido".
@@ -380,6 +420,11 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
 - No permitir SVG en `shop-logos` (XSS en el render cross-tenant del admin).
 - No sobrescribir-siempre `quote_number` en el trigger (rompe la preservación de números
   importados), ni quitarle el `DEFAULT 0` (el tipo Insert lo volvería requerido y rompe el FE).
+- No extender una suscripción con `current_period_end = current_period_end + interval`
+  ni recalcular el mes desde `now()` en un reintento: el vencimiento se escribe ABSOLUTO
+  desde el `period_end` guardado en el comprobante, o una aprobación repetida regala meses.
+- No dar al dueño UPDATE/DELETE sobre `bank_transfer_proofs` ni sobre los objetos de
+  `payment-proofs`: un comprobante es evidencia; corregirlo es rechazarlo y subir otro.
 
 ## Fuera de alcance V1
 Driver PWA, CarSOS, mecánicos móviles, botón de pánico, chatbot bidireccional de
