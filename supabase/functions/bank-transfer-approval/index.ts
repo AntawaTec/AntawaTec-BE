@@ -19,16 +19,16 @@
 import { createAdminClient, type SupabaseClient } from "../_shared/supabaseAdmin.ts";
 import {
   badRequest,
-  forbidden,
-  json,
   methodNotAllowed,
   notFound,
   ok,
   preflight,
   serverError,
-  unauthorized,
 } from "../_shared/response.ts";
 import { provisionTenant } from "../_shared/provisionTenant.ts";
+import { requireAntawaAdmin } from "../_shared/requireAdmin.ts";
+
+const LABEL = "bank-transfer-approval";
 
 const PROVIDER = "bank_transfer" as const;
 
@@ -53,29 +53,12 @@ Deno.serve(async (req) => {
     return serverError("Configuración del servidor incompleta.");
   }
 
-  // 2) Identidad del caller: Bearer del header, validado criptográficamente por GoTrue.
-  const token = extractBearer(req.headers.get("Authorization"));
-  if (!token) return unauthorized("Falta el token de autorización.");
-
-  const { data: userData, error: userErr } = await admin.auth.getUser(token);
-  if (userErr || !userData?.user) {
-    return unauthorized("Token inválido o expirado.");
-  }
-  const callerId = userData.user.id;
-
-  // 3) Autorización: el caller debe ser antawa_admin.
-  const { data: profile, error: profileErr } = await admin
-    .from("profiles")
-    .select("role")
-    .eq("id", callerId)
-    .maybeSingle();
-  if (profileErr) {
-    console.error("bank-transfer-approval: lectura de profile falló:", profileErr);
-    return serverError("No se pudo verificar el rol del usuario.");
-  }
-  if (!profile || profile.role !== "antawa_admin") {
-    return forbidden("Se requiere rol antawa_admin.");
-  }
+  // 2-3) Identidad + autorización del caller (Bearer validado por GoTrue + rol
+  //      antawa_admin leído de profiles). Compartido con
+  //      subscription-renewal-approval en _shared/requireAdmin.ts.
+  const auth = await requireAntawaAdmin(admin, req, LABEL);
+  if (!auth.ok) return auth.response;
+  const callerId = auth.userId;
 
   // 4) Body.
   let body: RequestBody;
@@ -151,13 +134,6 @@ Deno.serve(async (req) => {
 });
 
 // --- Helpers -----------------------------------------------------------------
-
-function extractBearer(authHeader: string | null): string | null {
-  if (!authHeader) return null;
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
-  const token = match?.[1]?.trim();
-  return token ? token : null;
-}
 
 async function markValidated(
   admin: SupabaseClient,
