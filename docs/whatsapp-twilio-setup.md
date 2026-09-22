@@ -230,17 +230,17 @@ Console → Account Info y NO va en el repo: la push protection de GitHub lo blo
 
 | Plantilla | Content SID |
 |---|---|
-| `appointment_confirmed` | `HX0208b77529d233a337dae0c34f508b91` |
-| `appointment_reminder_24h` | `HXf5fdfe6d67c0552e74abb1caef3ab4ad` |
-| `vehicle_received` | `HX5fc95937a79372a909f6c5402da4ca52` |
-| `quote_ready` | `HXa237edd658858248ac58fc464b46eca0` |
-| `vehicle_ready` | `HXea2ced0ad18db06df67c4adccf78e691` |
-| `delivery_completed` | `HXa405769d018367ad96a48f0d034d15ac` |
+| `appointment_confirmed` | `HX491c65b376270cf1f993a765b4a56173` |
+| `appointment_reminder_24h` | `HX00b84580cb9b6063b05faeade870b81d` |
+| `vehicle_received` | `HX8cc845313e0a70f8033a292a562853a2` |
+| `quote_ready` | `HX23a4f1b4acc63eb23d4c140bafe504c4` |
+| `vehicle_ready` | `HX9900973e9f548a611deab5c01793ccb5` |
+| `delivery_completed` | `HX4d47bef311990c6a3515d37bcfdb41f1` |
 
 Valor listo para pegar en el secret `TWILIO_CONTENT_SIDS`:
 
 ```json
-{"appointment_confirmed":"HX0208b77529d233a337dae0c34f508b91","appointment_reminder_24h":"HXf5fdfe6d67c0552e74abb1caef3ab4ad","vehicle_received":"HX5fc95937a79372a909f6c5402da4ca52","quote_ready":"HXa237edd658858248ac58fc464b46eca0","vehicle_ready":"HXea2ced0ad18db06df67c4adccf78e691","delivery_completed":"HXa405769d018367ad96a48f0d034d15ac"}
+{"appointment_confirmed":"HX491c65b376270cf1f993a765b4a56173","appointment_reminder_24h":"HX00b84580cb9b6063b05faeade870b81d","vehicle_received":"HX8cc845313e0a70f8033a292a562853a2","quote_ready":"HX23a4f1b4acc63eb23d4c140bafe504c4","vehicle_ready":"HX9900973e9f548a611deab5c01793ccb5","delivery_completed":"HX4d47bef311990c6a3515d37bcfdb41f1"}
 ```
 
 - **NO hay sender de WhatsApp registrado** (Numbers & senders → WhatsApp muestra el
@@ -252,3 +252,22 @@ Valor listo para pegar en el secret `TWILIO_CONTENT_SIDS`:
   5–10 s en hidratar; el editor de cuerpo acepta setear el `textarea` por JS con el
   native setter + evento `input`; el botón final "Submit" del diálogo de categoría hay
   que clickearlo de verdad (un `.click()` por JS no dispara el envío).
+
+### 2026-09-09 — los SIDs de arriba son la SEGUNDA tanda (gotcha "Received" que nunca llega a Meta)
+
+Las 6 plantillas originales del 2026-09-08 quedaron en `Received` en Twilio más de 24 h y
+**nunca aparecieron en WhatsApp Manager** (0 plantillas en la WABA `384688771391405`):
+Twilio no las reenvió a Meta porque en ese momento la cuenta solo tenía senders de prueba
+(+1 555…). El botón "Submit for WhatsApp approval" queda deshabilitado mientras diga
+`Received`, así que no hay reenvío posible: la solución fue **Duplicate → renombrar sin el
+prefijo `copy_of_` → Save and submit (Utility)** con el sender real ya Online. Las copias
+aparecieron en Meta en segundos como `<nombre>_hx<sid>` en estado "En revisión"
+(`appointment_reminder_24h` quedó Activa a los minutos).
+
+Los SIDs viejos (HX0208…, HXf5fd…, HX5fc9…, HXa237…, HXea2c…, HXa405…) quedaron como
+basura en Twilio; se pueden borrar. `TWILIO_CONTENT_SIDS` en prod debe apuntar a los nuevos.
+
+Sender real: **+593 98 438 2565** (migrado desde la WABA de Zoho: hubo que borrarlo de esa
+WABA con contraseña de Meta, esperar 3 min y registrarlo desde "Create new sender" con "My
+own phone number"; el número tenía que tener la verificación en dos pasos desactivada y un
+chip que reciba el SMS). Estado: Online, calidad Alta. Status callback cargado en el sender.
