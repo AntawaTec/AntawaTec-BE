@@ -424,6 +424,22 @@ verify_jwt = false
 [functions.bank-transfer-intake]
 verify_jwt = false
 
+# payphone-prepare: la invoca un PROSPECTO ANÓNIMO desde la landing estática para
+# empezar a pagar con tarjeta (no hay JWT posible: el usuario todavía no existe).
+# verify_jwt = false; la defensa es validación estricta in-code (_shared/prospect.ts),
+# honeypot y cap de 5 intents 'created' por email en 1 h, y que ni el service_role ni
+# el PAYPHONE_TOKEN salen de la función.
+[functions.payphone-prepare]
+verify_jwt = false
+
+# payphone-confirm: la invoca la MISMA landing anónima cuando Payphone devuelve al
+# usuario con ?id=&clientTransactionId=. verify_jwt = false por el mismo motivo. Lo
+# que la protege no es un JWT sino que el clientTransactionId es un uuid v4
+# impredecible y que la verdad del cobro sale del Confirm server-side de Payphone
+# (con el token secreto), nunca de lo que manda el navegador.
+[functions.payphone-confirm]
+verify_jwt = false
+
 # technician-access: la invoca el DUEÑO del taller desde el navegador (alta y
 # revocación del login de un técnico). verify_jwt = false por el mismo racional
 # que bank-transfer-approval: el preflight OPTIONS del navegador no lleva
