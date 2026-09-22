@@ -40,6 +40,7 @@ scripts/            # Tooling de desarrollo (NO lo corre el CLI)
   seed.sql                 # datos demo (requiere pegar 3 UIDs de auth)
   test_isolation.sql       # pruebas de aislamiento RLS
   test_quote_numbering.sql # valida el correlativo por taller de quotes (0012)
+docs/               # runbooks operativos (setup de WhatsApp/email, ventana de deploy)
 CLAUDE.md           # este archivo (raíz del repo)
 README.md
 ```
@@ -138,13 +139,54 @@ Landing → (Hotmart webhook **o** transferencia con aprobación de admin) → c
 `unique(provider, external_id)`) deduplica webhooks que se disparan dos veces.
 
 ## Notificaciones
-WhatsApp Cloud API (Meta, oficial) primario; Resend como fallback de email. 6
-plantillas: `appointment_confirmed`, `appointment_reminder_24h`, `vehicle_received`,
-`quote_ready`, `vehicle_ready`, `delivery_completed`. Despachadas por Edge Functions
-con cola de reintento; todo queda en `notification_log`. Sin chatbot en V1 (solo salida).
+WhatsApp Cloud API (Meta, oficial) primario; Resend para el email. **7 plantillas**
+(`notification_template`): `appointment_confirmed`, `appointment_reminder_24h`,
+`vehicle_received`, `work_in_process`, `quote_ready`, `vehicle_ready`,
+`delivery_completed`. Despachadas por Edge Functions con cola de reintento; todo
+queda en `notification_log`. Sin chatbot en V1 (solo salida).
 El WhatsApp tiene **dos proveedores intercambiables por env** (`WHATSAPP_PROVIDER`:
 `meta` por default, `twilio` como BSP) — mismo render y mismo `notification_log`,
 cambia solo el transporte y su webhook de estados (`docs/whatsapp-twilio-setup.md`).
+
+**Cobertura por canal.** WhatsApp renderiza 6 de las 7 (`work_in_process` es
+EMAIL-ONLY: una plantilla más en Meta/Twilio cuesta aprobación + conversación
+cobrada por un aviso que el correo ya cubre mejor). El correo cubre 4:
+`quote_ready` (desglose con precios en HTML), `vehicle_received` (**orden de
+trabajo en PDF adjunta**), `work_in_process` (aviso corto, sin adjunto) y
+`delivery_completed` (**recibo de entrega en PDF adjunto**). Las dos de citas y
+`vehicle_ready` siguen whatsapp-only. Cada evento encola **una fila por canal** y
+el dedupe es `(entidad, plantilla, canal)` (0034).
+
+**Correos con PDF** (`_shared/orderPdf.ts` + `_shared/orderSnapshot.ts`, `npm:pdf-lib`).
+Cuatro reglas que no son negociables:
+- El PDF se arma con la orden **FRESCA**, no con el snapshot del payload: estos
+  documentos son el ACTA de la orden, no el aviso. De ahí el **HOLD de 15 min**
+  para `(vehicle_received, email)` — la orden nace vacía y el taller la completa
+  después; la fila espera en `queued` **sin gastar un intento**.
+- `PDF_PER_TICK` acota cuántos PDFs genera cada corrida del cron; el resto queda
+  `queued` para el tick siguiente.
+- Archivar el PDF en el bucket `pdfs` es **best-effort**: un fallo del storage
+  NUNCA cambia `status` (marcar `failed` REENVIARÍA un correo ya entregado; misma
+  regla que los recibos de WhatsApp en 0038). Queda en `payload.pdf_upload_error`.
+- Las fuentes son las Standard 14 (WinAnsi) y pdf-lib **lanza** ante un carácter
+  fuera del set: TODO texto pasa por el sanitizador antes de `drawText`. El logo
+  se decide por **magic bytes** (webp → sin logo).
+
+**Textos duplicados con el FE — cambiarlos SIEMPRE en los dos repos y en el mismo
+lote.** Los PDFs son el espejo de las vistas imprimibles de la PWA; si divergen,
+el cliente recibe dos documentos distintos del mismo trabajo:
+
+| BE (`supabase/functions/_shared/`) | FE (`AntawaTec-FE/src/`) |
+|---|---|
+| `catalogSummary.ts` | `lib/data/catalog.ts` (`buildCatalogTree`, `summarizeSelections`, `CATALOG_MODULES`) |
+| `legal.ts` (`LIABILITY_DISCLAIMER`) | `lib/legal.ts` — ⚠️ placeholder hasta el texto real de Zoho |
+| `orderPdf.ts` | `components/ordenes/OrderPrintView.tsx` y `DeliveryReceiptView.tsx` |
+| labels de estado / folios (`OT-0042`, `N° 0042`) | `lib/data/workOrders.ts`, `lib/data/quotes.ts` |
+
+⚠️ **Todo par (plantilla, canal) NUEVO necesita backfill ANTES de deployar.** El
+barrido es state-driven y sin ventana temporal, y hay ~1.300 órdenes históricas:
+un par sin sembrar le manda correos reales a todo el histórico en el primer tick.
+Ver `supabase/migrations/0041_*.sql` y el runbook `docs/order-emails-deploy.md`.
 
 ## Lógica que NO va en triggers de DB (va en Edge/app)
 - Cotización aprobada → crear cita.
@@ -248,6 +290,24 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   service_role sobre el esquema de `0020`–`0022`. El template de invite pasó a copy neutro
   (lo comparten dueño y técnico); replicarlo a mano en el Dashboard hosted al deployar.
 
+- `[2026-09]` **Correos de la orden con PDF adjunto (lote L2).** Tres decisiones y
+  una trampa. (a) El PDF se genera SERVER-SIDE con `npm:pdf-lib` y desde la orden
+  **fresca**, no desde el snapshot del payload: la regla de "congelar lo enviado"
+  vale para el AVISO (la cotización que el dueño mandó), no para un ACTA que
+  describe el estado de la orden. La contracara es que la orden recién creada
+  todavía está vacía, así que el correo de recepción espera un **HOLD de 15 min**
+  en `queued` sin consumir intentos. (b) `work_in_process` nace **email-only**: una
+  7ª plantilla de WhatsApp cuesta aprobación + conversación cobrada por un aviso
+  que el correo cubre mejor (y con adjunto). El tipo `WhatsAppTemplate` lo excluye
+  con `Exclude<...>` para que el compilador obligue a escribir el renderer si algún
+  día se agrega, en vez de degradar en silencio. (c) El archivado en el bucket
+  `pdfs` es best-effort y NO toca `status` — misma lección que 0038: cambiar el
+  estado después de un envío exitoso reenvía el mensaje. La trampa: estrenar un par
+  (plantilla, canal) con el barrido state-driven y ~1.300 órdenes históricas es un
+  blast de correos reales; `0041` lo neutraliza sembrando filas terminales ANTES de
+  que exista el código que las encolaría, igual que el import de Zoho. El orden del
+  deploy (cron pausado → `db push` → verificar → `functions deploy`) es parte del
+  diseño, no del papeleo: está en `docs/order-emails-deploy.md`.
 - `[2026-09]` **Twilio como proveedor alternativo de WhatsApp** (`WHATSAPP_PROVIDER`,
   default `meta`): Meta factura contra la tarjeta de la WABA y el cobro rebotado dejó el
   canal a punto de cortarse; Twilio es BSP y factura él contra su propia línea con Meta.
