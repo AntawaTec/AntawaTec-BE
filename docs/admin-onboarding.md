@@ -1,9 +1,11 @@
 # Admin de Antawa: alta del rol y flujo de renovaciones
 
-> Dos procedimientos que hoy viven en la cabeza del dev y no en el repo:
+> Procedimientos que hoy viven en la cabeza del dev y no en el repo:
 > **(a)** cómo crear un usuario `antawa_admin` (el único rol que puede aprobar
-> comprobantes) y **(b)** cómo funciona la **renovación mensual por transferencia**
-> desde que el dueño sube el comprobante hasta que la suscripción queda extendida.
+> comprobantes), **(b)** cómo funciona la **renovación mensual por transferencia**
+> desde que el dueño sube el comprobante hasta que la suscripción queda extendida y
+> **(c)** qué hacer cuando un **dueño no puede entrar** porque el enlace mágico "no
+> funciona".
 
 ---
 
@@ -188,3 +190,57 @@ order by sub.current_period_end nulls first;
 - **Un taller con suscripción de Hotmart** que renueve por transferencia extiende
   esa fila de Hotmart en vez de crear una segunda. Es deliberado: dos filas activas
   con fechas distintas serían dos verdades sobre "hasta cuándo pagó".
+
+---
+
+## (c) Dueño que no puede entrar (enlace mágico "no funciona")
+
+### Causa
+
+`provisionTenant` da de alta al dueño con **`inviteUserByEmail`**. Mientras el
+dueño no abra ese mail de invitación, su usuario de auth queda con
+`email_confirmed_at = null`. Como el proyecto tiene los signups cerrados, cuando
+ese dueño pide un **enlace mágico** desde la pantalla de ingreso GoTrue lo trata
+como un alta nueva y responde **"Signups not allowed"** (supabase/auth#1494). Para
+el dueño el síntoma es simplemente "el enlace no me llega / no funciona".
+
+Diagnóstico rápido por SQL:
+
+```sql
+select u.email, u.email_confirmed_at, u.invited_at, u.last_sign_in_at
+from public.profiles p
+join auth.users u on u.id = p.id
+where p.shop_id = '<shop_id>' and p.role = 'shop_owner';
+```
+
+`email_confirmed_at` en `null` = este caso.
+
+### Qué hace el admin (UI)
+
+**app.antwt.com/admin** → fila del taller → **Accesos**. Por detrás invoca la Edge
+Function `owner-access` con el JWT del admin (solo `antawa_admin`; solo actúa sobre
+el profile `shop_owner` de ESE taller, nunca sobre admins ni técnicos):
+
+- **Reenviar invitación** (`reinvite`): GoTrue re-envía el mail de invitación. Solo
+  sirve si el dueño todavía no confirmó; si ya confirmó responde 409 ("puede pedir
+  un enlace nuevo desde la pantalla de ingreso") y lo que corresponde es la
+  contraseña temporal.
+- **Contraseña temporal** (`set_password`, mínimo 8 caracteres): el admin se la
+  pasa en mano al dueño. Además **confirma el email**, así que desde ese momento
+  el enlace mágico también funciona. Marca `user_metadata.temp_password = true`
+  para que la PWA le pida cambiarla al entrar.
+
+La vista también muestra el estado (`status`): email, si confirmó, cuándo se lo
+invitó y su último ingreso.
+
+### Fallback manual (si la UI no está disponible)
+
+Dashboard → **SQL Editor**:
+
+```sql
+update auth.users set email_confirmed_at = now() where email = '<email-del-dueño>';
+```
+
+Con eso el dueño ya puede pedir el enlace mágico normalmente desde la pantalla de
+ingreso (verificar antes que el email sea el del `shop_owner` del taller, con la
+consulta de diagnóstico de arriba).
