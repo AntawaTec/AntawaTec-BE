@@ -2,8 +2,8 @@
 // _shared/requireAdmin.ts
 // Verificación de "quien llama es antawa_admin", compartida por las funciones
 // que invoca el admin desde el navegador (`bank-transfer-approval`,
-// `subscription-renewal-approval`). Extraída de bank-transfer-approval SIN
-// cambio de comportamiento: mismos códigos HTTP y mismos mensajes.
+// `subscription-renewal-approval`, `owner-access`). Extraída de
+// bank-transfer-approval SIN cambio de comportamiento: mismos códigos HTTP y mismos mensajes.
 //
 // Por qué in-code y no `verify_jwt = true` en el gateway: el preflight OPTIONS
 // del navegador NO lleva Authorization y el gateway lo mataría con 401 antes del

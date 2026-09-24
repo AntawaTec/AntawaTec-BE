@@ -258,6 +258,9 @@ Ver `supabase/migrations/0041_*.sql` y el runbook `docs/order-emails-deploy.md`.
 - `technician-access`: alta (invite por email / contraseña temporal) y revocación del
   login de un técnico, invocada por el owner desde la PWA. Auth in-code (JWT + rol
   shop_owner + tenancy del técnico); re-entrante con marker en `user_metadata`.
+- `owner-access`: el admin restaura el acceso del DUEÑO de un taller (`status` /
+  `reinvite` / `set_password`) cuando el magic link no le funciona. Auth in-code vía
+  `_shared/requireAdmin.ts`; solo resuelve el profile `shop_owner` del taller pedido.
 - Secretos con `Deno.env.get(...)`; nunca hardcodear.
 - Webhooks y provisioning **idempotentes**. Códigos HTTP y errores consistentes.
 
@@ -405,6 +408,16 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   `status`, `kind`, `shop_id` y deja `period_*`/`validated_*` nulos, y un unique parcial
   le permite UN pendiente. En storage, la policy SELECT del dueño va sí o sí (lección
   `0028`): sin ella el upsert falla y no puede firmar su propio archivo.
+
+- `[2026-09]` **`owner-access`** (Edge Function, sin migración). Caso de prod: un dueño
+  dado de alta por `provisionTenant` (`inviteUserByEmail`) que nunca abrió el invite queda
+  con `email_confirmed_at` null y, con los signups cerrados, GoTrue le responde "Signups
+  not allowed" a todo magic link (supabase/auth#1494): no tiene cómo salir solo. El admin
+  tiene tres acciones: `status` (diagnóstico), `reinvite` (GoTrue re-envía el invite a un
+  usuario NO confirmado; si ya confirmó → 409) y `set_password` (contraseña temporal +
+  `email_confirm: true`, que además destraba el magic link, y `temp_password: true` en
+  `user_metadata` para que el FE pida cambiarla). El dueño se resuelve con
+  `role = 'shop_owner'` EN la consulta: la función jamás toca un admin ni un técnico.
 
 ## Qué evitar
 - No editar migraciones ya aplicadas.

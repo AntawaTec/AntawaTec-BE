@@ -459,6 +459,14 @@ verify_jwt = false
 [functions.technician-access]
 verify_jwt = false
 
+# owner-access: la invoca el ADMIN desde el navegador para restaurar el acceso del
+# dueño de un taller (reinvitar / contraseña temporal). Mismo racional que
+# bank-transfer-approval: el preflight OPTIONS no lleva Authorization y con
+# verify_jwt = true moriría con 401 antes del CORS. La auth real (JWT contra GoTrue
+# + rol antawa_admin, vía _shared/requireAdmin.ts) va DENTRO de la función.
+[functions.owner-access]
+verify_jwt = false
+
 # notification-dispatch: la invoca pg_cron (server-to-server, sin JWT de usuario).
 # La auth real es el header x-cron-secret == CRON_SECRET, validado DENTRO de la
 # función (mismo patrón que `hottok` en hotmart-webhook). En prod CRON_SECRET DEBE
