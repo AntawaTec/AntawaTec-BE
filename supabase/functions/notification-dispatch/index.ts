@@ -6,6 +6,9 @@
 //      notificación y la inserta 'queued' (idempotente por el índice único de 0034).
 //      Esto vive en la edge function (no en triggers) → honra la regla del BE, y al
 //      ser state-driven no se puede saltear un evento (durable, no fire-and-forget).
+//      Cada lectura es PAGINADA (`_shared/paginate.ts`: PostgREST corta en
+//      max_rows=1000 en silencio) y ACOTADA a los últimos SWEEP_WINDOW_DAYS por
+//      `updated_at` (salvo el recordatorio, que ya acota por `scheduled_at`).
 //   B) DRENADO: procesa 'queued' + 'failed' (attempts<MAX), renderiza, "envía" (en
 //      sandbox = dry-run), marca 'sent'/'failed'. El reintento es el mismo drenado.
 //
@@ -47,6 +50,7 @@ import {
   type LogoImage,
 } from "../_shared/orderPdf.ts";
 import { createCatalogCache, fetchLogo, loadOrderPdfSnapshot } from "../_shared/orderSnapshot.ts";
+import { selectAll } from "../_shared/paginate.ts";
 
 const MAX_ATTEMPTS = 5;
 const DRAIN_LIMIT = 100;
@@ -65,6 +69,14 @@ const PDF_KIND: Record<string, "orden" | "recibo"> = {
 // Tope de ids por request en los filtros `.in(...)`: PostgREST los manda en la URL
 // y una lista larga de UUIDs la desborda. Solo importa cuando el histórico crece.
 const IN_CHUNK = 200;
+// Ventana del barrido: solo mira filas con `updated_at` en los últimos N días.
+// Por `updated_at` y NO por `created_at` porque cada bloque busca un CAMBIO DE
+// ESTADO, y todo UPDATE bumpea `updated_at` (trigger `set_updated_at`): una orden
+// de hace un año que hoy pasa a 'delivery' entra hoy. Si el pipeline estuviera
+// caído más de N días, se resuelve SEMBRANDO (backfill, como 0041/0044) antes de
+// ampliar la ventana, nunca al revés: ampliar lo que ve el barrido equivale, para
+// el dedupe, a estrenar un par y mandaría avisos viejos reales.
+const SWEEP_WINDOW_DAYS = 30;
 
 type Row = Record<string, unknown>;
 type Channel = "whatsapp" | "email";
@@ -135,15 +147,21 @@ async function enqueueMissing(
     payload: r.payload as unknown as Record<string, unknown>,
     status: "queued" as const,
   }));
-  const { data, error } = await admin
-    .from("notification_log")
-    .upsert(toInsert, {
-      onConflict: "related_entity_type,related_entity_id,template,channel",
-      ignoreDuplicates: true,
-    })
-    .select("id");
-  if (error) throw error;
-  return data?.length ?? 0;
+  // En tramos de IN_CHUNK: acota el body y el RETURNING mientras haya muchos
+  // candidatos en ventana. Con ignoreDuplicates no hay atomicidad que perder.
+  let inserted = 0;
+  for (const part of chunk(toInsert)) {
+    const { data, error } = await admin
+      .from("notification_log")
+      .upsert(part, {
+        onConflict: "related_entity_type,related_entity_id,template,channel",
+        ignoreDuplicates: true,
+      })
+      .select("id");
+    if (error) throw error;
+    inserted += data?.length ?? 0;
+  }
+  return inserted;
 }
 
 // Pre-filtro barato: qué eventos YA tienen fila, por canal. Existe para no pagar el
@@ -312,8 +330,14 @@ function toEmailPayload(
 // ---------------------------------------------------------------------------
 // Barrido
 // ---------------------------------------------------------------------------
-async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<number> {
+async function sweep(
+  admin: ReturnType<typeof createAdminClient>,
+): Promise<{ enqueued: number; scanned: number }> {
   let enq = 0;
+  // Filas leídas por el barrido (suma de los 7 bloques): el único observable
+  // externo de que la ventana y el paginado hacen lo que dicen.
+  let scanned = 0;
+  const sinceIso = new Date(Date.now() - SWEEP_WINDOW_DAYS * 86_400_000).toISOString();
   const shops = await loadShops(admin);
   const shopOf = (id: unknown) => shops.get(id as string) ?? null;
 
@@ -327,8 +351,9 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
   // vehicle_received: toda orden creada. WhatsApp para todas + email (alcance v1)
   // con el detalle de los trabajos acordados cuando la orden nace de una cotización.
   {
-    const { data } = await admin.from("work_orders").select(woSel);
-    const rows = (data ?? []) as Row[];
+    const rows = await selectAll<Row>(() =>
+      admin.from("work_orders").select(woSel).gte("updated_at", sinceIso));
+    scanned += rows.length;
     enq += await enqueueMissing(admin, "vehicle_received", "work_order",
       rows.map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
 
@@ -352,9 +377,11 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
   }
   // vehicle_ready: orden que alcanzó (o pasó) 'delivery'.
   {
-    const { data } = await admin.from("work_orders").select(woSel).in("status", ["delivery", "historical"]);
+    const rows = await selectAll<Row>(() =>
+      admin.from("work_orders").select(woSel).in("status", ["delivery", "historical"]).gte("updated_at", sinceIso));
+    scanned += rows.length;
     enq += await enqueueMissing(admin, "vehicle_ready", "work_order",
-      (data ?? []).map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
+      rows.map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
   }
   // work_in_process: orden en curso. EMAIL-ONLY y SOLO `status = 'in_process'`, no
   // "in_process o posterior" como vehicle_ready: es un estado TRANSITORIO y el
@@ -363,8 +390,9 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
   // aviso junto con "tu vehículo está listo" en el mismo minuto sería absurdo.
   // (El histórico anterior al lanzamiento lo neutraliza el backfill de 0041.)
   {
-    const { data } = await admin.from("work_orders").select(woSel).eq("status", "in_process");
-    const rows = (data ?? []) as Row[];
+    const rows = await selectAll<Row>(() =>
+      admin.from("work_orders").select(woSel).eq("status", "in_process").gte("updated_at", sinceIso));
+    scanned += rows.length;
     if (rows.length > 0) {
       const existing = await existingByChannel(admin, "work_in_process", "work_order", rows.map((w) => w.id as string));
       const missing = rows.filter((w) => !existing.email.has(w.id as string));
@@ -386,10 +414,12 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
   // Los DOS canales: el WhatsApp lleva el resumen aplanado, el correo el recibo en
   // PDF (que el drenado genera desde la orden fresca, no desde este payload).
   {
-    const { data } = await admin.from("work_orders")
-      .select(`${woSel}, delivery:work_order_deliveries(services_summary)`)
-      .eq("status", "historical");
-    const rows = (data ?? []) as Row[];
+    const rows = await selectAll<Row>(() =>
+      admin.from("work_orders")
+        .select(`${woSel}, delivery:work_order_deliveries(services_summary)`)
+        .eq("status", "historical")
+        .gte("updated_at", sinceIso));
+    scanned += rows.length;
     enq += await enqueueMissing(admin, "delivery_completed", "work_order",
       rows.map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
 
@@ -410,18 +440,24 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
   }
   // appointment_confirmed: cita originada en una cotización.
   {
-    const { data } = await admin.from("appointments").select(apSel).eq("source", "quote");
+    const rows = await selectAll<Row>(() =>
+      admin.from("appointments").select(apSel).eq("source", "quote").gte("updated_at", sinceIso));
+    scanned += rows.length;
     enq += await enqueueMissing(admin, "appointment_confirmed", "appointment",
-      (data ?? []).map((a) => ({ id: a.id as string, shop_id: a.shop_id as string, customer_id: a.customer_id as string, payload: apptPayload(a, shopOf(a.shop_id)) })));
+      rows.map((a) => ({ id: a.id as string, shop_id: a.shop_id as string, customer_id: a.customer_id as string, payload: apptPayload(a, shopOf(a.shop_id)) })));
   }
   // appointment_reminder_24h: citas en la ventana [now+23h, now+24h], activas.
+  // Solo se pagina: su ventana es por `scheduled_at`, NO por `updated_at` (una
+  // cita agendada hace 2 meses para mañana no se tocó en 30 días y debe entrar).
   {
     const from = new Date(Date.now() + 23 * 3600_000).toISOString();
     const to = new Date(Date.now() + 24 * 3600_000).toISOString();
-    const { data } = await admin.from("appointments").select(apSel)
-      .gte("scheduled_at", from).lte("scheduled_at", to).in("status", ["scheduled", "confirmed"]);
+    const rows = await selectAll<Row>(() =>
+      admin.from("appointments").select(apSel)
+        .gte("scheduled_at", from).lte("scheduled_at", to).in("status", ["scheduled", "confirmed"]));
+    scanned += rows.length;
     enq += await enqueueMissing(admin, "appointment_reminder_24h", "appointment",
-      (data ?? []).map((a) => ({ id: a.id as string, shop_id: a.shop_id as string, customer_id: a.customer_id as string, payload: apptPayload(a, shopOf(a.shop_id)) })));
+      rows.map((a) => ({ id: a.id as string, shop_id: a.shop_id as string, customer_id: a.customer_id as string, payload: apptPayload(a, shopOf(a.shop_id)) })));
   }
   // quote_ready: cotización que el dueño marcó como enviada al cliente (0033).
   // sent_at nace NULL en todas las filas existentes → este evento NO arrastra
@@ -429,8 +465,9 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
   // línea de resumen, el correo para el desglose), así que el pre-filtro de
   // faltantes cubre a los dos.
   {
-    const { data } = await admin.from("quotes").select(qtSel).not("sent_at", "is", null);
-    const rows = (data ?? []) as Row[];
+    const rows = await selectAll<Row>(() =>
+      admin.from("quotes").select(qtSel).not("sent_at", "is", null).gte("updated_at", sinceIso));
+    scanned += rows.length;
     if (rows.length > 0) {
       const ids = rows.map((q) => q.id as string);
       const existing = await existingByChannel(admin, "quote_ready", "quote", ids);
@@ -460,7 +497,7 @@ async function sweep(admin: ReturnType<typeof createAdminClient>): Promise<numbe
         }), "email");
     }
   }
-  return enq;
+  return { enqueued: enq, scanned };
 }
 
 // ---------------------------------------------------------------------------
@@ -654,12 +691,14 @@ Deno.serve(async (req: Request) => {
 
   try {
     const admin = createAdminClient();
-    const enqueued = await sweep(admin);
+    const { enqueued, scanned } = await sweep(admin);
     const { sent, failed, held, deferred } = await drain(admin);
     // `held` (esperando el HOLD de 15 min) y `deferred` (fuera del presupuesto de
     // PDFs del tick) salen en la respuesta: sin ellos, un operador que invoca a
     // mano vería "0 enviados" y no sabría si el pipeline está trabado o esperando.
-    return ok({ enqueued, sent, failed, held, deferred });
+    // `scanned` (filas que leyó el barrido, suma de los 7 bloques) es lo que deja
+    // verificar desde afuera que la ventana y el paginado alcanzan lo que deben.
+    return ok({ enqueued, scanned, sent, failed, held, deferred });
   } catch (e) {
     const msg = e instanceof Error ? e.message
       : (e && typeof e === "object") ? JSON.stringify(e)
