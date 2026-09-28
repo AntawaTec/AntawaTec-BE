@@ -31,7 +31,7 @@ migración directa. Base de datos **Postgres**. Desarrollo solo, asistido por IA
 ## Estructura de carpetas
 ```
 supabase/
-  migrations/       # 0001_foundation.sql ... 0019_*.sql. NUNCA editar una aplicada.
+  migrations/       # 0001_foundation.sql ... 0044_*.sql. NUNCA editar una aplicada.
   functions/        # Edge Functions (una carpeta por función con index.ts)
     _shared/        # Código compartido entre funciones
   config.toml
@@ -218,10 +218,17 @@ el cliente recibe dos documentos distintos del mismo trabajo:
 | `orderPdf.ts` | `components/ordenes/OrderPrintView.tsx` y `DeliveryReceiptView.tsx` |
 | labels de estado / folios (`OT-0042`, `N° 0042`) | `lib/data/workOrders.ts`, `lib/data/quotes.ts` |
 
-⚠️ **Todo par (plantilla, canal) NUEVO necesita backfill ANTES de deployar.** El
-barrido es state-driven y sin ventana temporal, y hay ~1.300 órdenes históricas:
-un par sin sembrar le manda correos reales a todo el histórico en el primer tick.
-Ver `supabase/migrations/0041_*.sql` y el runbook `docs/order-emails-deploy.md`.
+⚠️ **Todo par (plantilla, canal) NUEVO — y toda ampliación de lo que el barrido
+VE — necesita backfill ANTES de deployar.** El barrido es state-driven, **paginado**
+(`_shared/paginate.ts`: `selectAll` con `.order("id")` + `.range()`, lanza ante error)
+y acotado a `updated_at >= now() - 30 días` (por `updated_at` y no `created_at`: cada
+evento es un cambio de estado y el trigger `set_updated_at` la bumpea; el recordatorio
+de citas acota por `scheduled_at`). Hay ~1.400 órdenes, casi todas históricas:
+estrenar un par, ensanchar la ventana, aflojar un filtro o arreglar un paginado hace
+que el barrido vea filas "faltantes" que para el cliente son de hace meses, y el
+primer tick las manda (WhatsApp y correo, en vivo). Primero se siembran filas
+terminales: `0041` + `docs/order-emails-deploy.md` (pares nuevos) y `0044` +
+`docs/sweep-pagination-deploy.md` (barrido que dejaba filas sin ver).
 
 ## Lógica que NO va en triggers de DB (va en Edge/app)
 - Cotización aprobada → crear cita.
@@ -277,6 +284,11 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
 
 **Estado (2026-06):** `0012`–`0019` ya pasaron por el flujo normal (`migration new` → editar
 → `db push`) y están aplicadas en remoto. Local y remoto alineados hasta `0019`.
+
+**Estado (2026-09):** todo sigue el flujo normal; local y remoto alineados hasta `0044`.
+Las migraciones de **contención** de notificaciones (`0041`, `0044`) no se aplican sueltas:
+van dentro de su runbook (`docs/order-emails-deploy.md`, `docs/sweep-pagination-deploy.md`),
+con el cron pausado y ANTES del deploy de la función.
 
 ## Decisiones y aprendizajes (log vivo)
 > Documenta el **porqué** de las decisiones de esquema y seguridad.
@@ -419,6 +431,23 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   `user_metadata` para que el FE pida cambiarla). El dueño se resuelve con
   `role = 'shop_owner'` EN la consulta: la función jamás toca un admin ni un técnico.
 
+- `[2026-09]` **Barrido truncado por `max_rows`** (`0044` + `_shared/paginate.ts`). Qué
+  pasó: 5 días (22 al 27-sep) sin `vehicle_received` / `vehicle_ready` /
+  `delivery_completed` para TODA orden creada o movida desde el 22-sep. PostgREST corta
+  cualquier respuesta en `max_rows = 1000` **sin error**; tras el import de Zoho
+  `work_orders` llegó a ~1.376 filas y el `.select()` del barrido (sin `.range()` ni
+  `.order()`) devolvía 1.000 en orden de heap — y el `const { data } = …` sin leer
+  `error` lo tapó. Qué se decidió: (a) helper `selectAll` con `.order("id")` +
+  `.range()` en bucle, que **lanza** ante error (→ 500, el cron reintenta al minuto) y
+  rechaza páginas mayores que `max_rows`; (b) ventana por `updated_at` (30 días) y no
+  por `created_at`, porque el evento es un cambio de estado y el trigger la bumpea: una
+  orden vieja que hoy pasa a `delivery` entra hoy; (c) `0044` siembra ANTES del deploy
+  todo lo que el barrido corregido vería faltante (~290 pares, 256 de órdenes
+  importadas de Zoho) y deja pasar SOLO los `vehicle_ready` de las órdenes en
+  `delivery` creadas desde el 22-sep (clientes que todavía esperan retirar). Lección:
+  para el dedupe, **ampliar lo que un barrido ve es lo mismo que estrenar un par** —
+  arreglar un bug de lectura también es un blast si no se siembra primero.
+
 ## Qué evitar
 - No editar migraciones ya aplicadas.
 - No desactivar RLS "para que funcione rápido".
@@ -438,6 +467,10 @@ adelante: `migration new` → editar → `db push`. El dashboard queda solo para
   desde el `period_end` guardado en el comprobante, o una aprobación repetida regala meses.
 - No dar al dueño UPDATE/DELETE sobre `bank_transfer_proofs` ni sobre los objetos de
   `payment-proofs`: un comprobante es evidencia; corregirlo es rechazarlo y subir otro.
+- No hacer `.select()` sin `selectAll` / `.range()`, ni sin leer `error`, sobre tablas que
+  crecen: `max_rows = 1000` corta en silencio y el código sigue con datos parciales.
+- No ampliar lo que un barrido ve (ventana, filtro, paginado) sin sembrar primero las
+  filas terminales de lo que pasaría a ver: el primer tick lo manda todo, en vivo.
 
 ## Fuera de alcance V1
 Driver PWA, CarSOS, mecánicos móviles, botón de pánico, chatbot bidireccional de
