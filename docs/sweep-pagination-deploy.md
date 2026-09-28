@@ -202,10 +202,12 @@ La respuesta trae `{ enqueued, scanned, sent, failed, held, deferred }`:
 - `sent` ≈ lo mismo: **barrido y drenado corren en la misma invocación**, así que lo
   encolado en este tick ya se manda en este tick (hasta `DRAIN_LIMIT = 100`; los
   correos de recepción esperan el HOLD de 15 min y los PDFs pasan por `PDF_PER_TICK`).
-- `scanned` ≈ **1.4k** es **esperado** hasta ~**2026-10-22**: las órdenes importadas
-  de Zoho tienen `updated_at` = fecha del import y siguen dentro de la ventana de 30
-  días. Ya están sembradas, así que solo cuestan filas leídas, no envíos. Después
-  baja a lo que se movió en el último mes.
+- `scanned` ≈ **4k** es **esperado** hasta ~**2026-10-22**: es la SUMA de los 7
+  bloques del barrido, y las ~1.400 órdenes importadas de Zoho (con `updated_at` =
+  fecha del import, dentro de la ventana de 30 días) se leen hasta tres veces
+  (`vehicle_received`, `vehicle_ready`, `delivery_completed`). Ya están sembradas,
+  así que solo cuestan filas leídas, no envíos. Después baja a lo que se movió en
+  el último mes (decenas).
 - Un **500** es un error de lectura del barrido (ahora lanza en vez de tragarse el
   `error`): mirar los logs de la función antes de seguir.
 
@@ -272,7 +274,7 @@ select template, channel, status, provider_status, error from public.notificatio
 - Al día siguiente, una orden nueva creada en la app tiene que generar
   `vehicle_received` por WhatsApp (al minuto) y por correo (tras el HOLD de 15 min).
   Hoy no lo hace: es la prueba de que el fix funciona.
-- `scanned` en los logs del cron ≈ 1.4k hasta ~2026-10-22 (ver Paso 5); no es un
+- `scanned` en los logs del cron ≈ 4k hasta ~2026-10-22 (ver Paso 5); no es un
   problema de performance ni de envíos.
 
 ---
