@@ -87,10 +87,18 @@ function customerName(p: NotificationPayload): string {
   return collapseParam(p.customer_name ?? "") || "cliente";
 }
 
+// Ecuador no tiene horario de verano: el offset es fijo -05:00 (mismo criterio que
+// orderPdf.ts). `scheduled_at` es timestamptz y llega en UTC: recortar el ISO tal
+// cual le anunciaba al cliente la cita 5 horas más tarde (08:30 → "13:30").
+const EC_OFFSET_MS = -5 * 3600_000;
+
 function fmtDate(iso?: string | null): string {
-  if (!iso) return "la fecha agendada";
-  // Formato simple y estable (sin locale del runtime): "2026-06-25 09:00".
-  return iso.replace("T", " ").slice(0, 16);
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) return "la fecha agendada";
+  // Formato estable (sin Intl ni locale del runtime): "25/06/2026 a las 09:00".
+  const d = new Date(t + EC_OFFSET_MS);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} a las ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
 function fmtMoney(n: number): string {
