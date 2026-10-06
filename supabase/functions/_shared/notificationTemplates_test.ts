@@ -27,3 +27,9 @@ Deno.test("sin fecha (o ilegible) cae al texto genérico", () => {
   assertEquals(renderTemplate("appointment_confirmed", { ...base, scheduled_at: null })!.components[2], "la fecha agendada");
   assertEquals(renderTemplate("appointment_confirmed", { ...base, scheduled_at: "nope" })!.components[2], "la fecha agendada");
 });
+
+Deno.test("recordatorio del día: 'hoy' va en el cuerpo y la variable 3 es solo la hora de Ecuador", () => {
+  const r = renderTemplate("appointment_reminder_today", { ...base, scheduled_at: "2026-10-06T13:00:00Z" })!;
+  assertEquals(r.components, ["Ana", "ABC1234", "08:00", "Taller X"]);
+  assertStringIncludes(r.text, "hoy tienes tu cita para tu vehículo ABC1234 a las 08:00.");
+});

@@ -2,8 +2,8 @@
 // _shared/notificationTemplates.ts
 // Render de las plantillas de WhatsApp. PURO (sin I/O) → fácil de testear.
 //
-// El enum `notification_template` de la DB tiene 7 valores, pero WhatsApp solo
-// renderiza 6: `work_in_process` (lote L2) es **email-only** por decisión de
+// El enum `notification_template` de la DB tiene 8 valores, pero WhatsApp solo
+// renderiza 7: `work_in_process` (lote L2) es **email-only** por decisión de
 // producto — registrar una 7ª plantilla en Meta/Twilio cuesta una aprobación y
 // una conversación cobrada por un aviso que el correo ya cubre mejor (y que
 // además lleva adjunto). Por eso el tipo lista los 7 y RENDERERS excluye ese uno
@@ -19,10 +19,12 @@
 // Decidido vía debate dual-Opus (insight de Orion: el swap NO es "una función"
 // si solo guardás texto).
 // =============================================================================
+import { fmtEcDateTime, fmtEcTime } from "./ecTime.ts";
 
 export type NotificationTemplate =
   | "appointment_confirmed"
   | "appointment_reminder_24h"
+  | "appointment_reminder_today"
   | "vehicle_received"
   | "work_in_process"
   | "quote_ready"
@@ -87,18 +89,15 @@ function customerName(p: NotificationPayload): string {
   return collapseParam(p.customer_name ?? "") || "cliente";
 }
 
-// Ecuador no tiene horario de verano: el offset es fijo -05:00 (mismo criterio que
-// orderPdf.ts). `scheduled_at` es timestamptz y llega en UTC: recortar el ISO tal
-// cual le anunciaba al cliente la cita 5 horas más tarde (08:30 → "13:30").
-const EC_OFFSET_MS = -5 * 3600_000;
-
+// `scheduled_at` es timestamptz y llega en UTC: recortar el ISO tal cual le
+// anunciaba al cliente la cita 5 horas más tarde (08:30 → "13:30"). Se formatea
+// en hora de Ecuador (ecTime.ts): "25/06/2026 a las 09:00" / "09:00".
 function fmtDate(iso?: string | null): string {
-  const t = iso ? Date.parse(iso) : NaN;
-  if (Number.isNaN(t)) return "la fecha agendada";
-  // Formato estable (sin Intl ni locale del runtime): "25/06/2026 a las 09:00".
-  const d = new Date(t + EC_OFFSET_MS);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} a las ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  return fmtEcDateTime(iso) ?? "la fecha agendada";
+}
+
+function fmtTime(iso?: string | null): string {
+  return fmtEcTime(iso) ?? "la hora agendada";
 }
 
 function fmtMoney(n: number): string {
@@ -204,6 +203,21 @@ const RENDERERS: Record<WhatsAppTemplate, (p: NotificationPayload) => RenderedNo
         `Hola ${name}, te recordamos tu cita para tu vehículo ${veh} mañana ${date}.\n\n` +
         `Te esperamos,\n\n${sign}\n\n${AVISO}`,
       components: [name, veh, date, sign],
+    };
+  },
+  // El día de la cita, a las 07:00: "hoy" va en el cuerpo fijo y la variable 3 es
+  // SOLO la hora. Cubre también a las citas que se agendaron con menos de un día
+  // de anticipación y por eso nunca entraron en la ventana del recordatorio 24h.
+  appointment_reminder_today: (p) => {
+    const name = customerName(p);
+    const veh = vehicleLabel(p);
+    const time = fmtTime(p.scheduled_at);
+    const sign = signatureLine(p);
+    return {
+      text:
+        `Hola ${name}, te recordamos que hoy tienes tu cita para tu vehículo ${veh} a las ${time}.\n\n` +
+        `Te esperamos,\n\n${sign}\n\n${AVISO}`,
+      components: [name, veh, time, sign],
     };
   },
   vehicle_received: (p) => {

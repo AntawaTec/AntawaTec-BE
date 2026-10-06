@@ -18,8 +18,8 @@
 //
 // Alcance del email (lote L2, «correos de la orden»): quote_ready, vehicle_received
 // (con la ORDEN en PDF adjunta), work_in_process (email-only, sin adjunto) y
-// delivery_completed (con el RECIBO en PDF adjunto). Los tres restantes (las dos de
-// citas y vehicle_ready) siguen whatsapp-only.
+// delivery_completed (con el RECIBO en PDF adjunto). Los cuatro restantes (las tres
+// de citas y vehicle_ready) siguen whatsapp-only.
 //
 // Dos reglas del drenado que solo existen por los PDFs:
 //   * HOLD de 15 min para (vehicle_received, email): la orden se crea vacía y el
@@ -51,6 +51,8 @@ import {
 } from "../_shared/orderPdf.ts";
 import { createCatalogCache, fetchLogo, loadOrderPdfSnapshot } from "../_shared/orderSnapshot.ts";
 import { selectAll } from "../_shared/paginate.ts";
+import { ecDayStartMs, ecMinutesOfDay } from "../_shared/ecTime.ts";
+import { parseContentSids } from "../_shared/twilio.ts";
 
 const MAX_ATTEMPTS = 5;
 const DRAIN_LIMIT = 100;
@@ -282,6 +284,14 @@ function woPayload(w: Row, shop: ShopInfo | null): NotificationPayload {
   } as NotificationPayload & { whatsapp_number: string | null };
 }
 
+// Con WHATSAPP_PROVIDER=twilio la plantilla solo existe si su SID está en
+// TWILIO_CONTENT_SIDS; con Meta el nombre basta (la decide la plantilla registrada).
+function reminderTodayConfigured(): boolean {
+  const provider = (Deno.env.get("WHATSAPP_PROVIDER") ?? "meta").trim().toLowerCase();
+  if (provider !== "twilio") return true;
+  return Boolean(parseContentSids(Deno.env.get("TWILIO_CONTENT_SIDS"))["appointment_reminder_today"]);
+}
+
 function apptPayload(a: Row, shop: ShopInfo | null): NotificationPayload {
   const c = firstOf(a.customer as Row | Row[]);
   const v = firstOf(a.vehicle as Row | Row[]);
@@ -438,13 +448,44 @@ async function sweep(
         }), "email");
     }
   }
-  // appointment_confirmed: cita originada en una cotización.
+  // appointment_confirmed: toda cita activa y futura, venga de una cotización o
+  // se haya agendado a mano (pedido del taller 2026-10-06; antes era solo
+  // `source = 'quote'`). `scheduled_at >= now` evita confirmar una cita que ya
+  // pasó (p. ej. una reprogramada hacia atrás); el histórico anterior al
+  // lanzamiento lo neutraliza el backfill de 0046.
+  const nowIso = new Date().toISOString();
   {
     const rows = await selectAll<Row>(() =>
-      admin.from("appointments").select(apSel).eq("source", "quote").gte("updated_at", sinceIso));
+      admin.from("appointments").select(apSel)
+        .in("status", ["scheduled", "confirmed"]).gte("scheduled_at", nowIso).gte("updated_at", sinceIso));
     scanned += rows.length;
     enq += await enqueueMissing(admin, "appointment_confirmed", "appointment",
       rows.map((a) => ({ id: a.id as string, shop_id: a.shop_id as string, customer_id: a.customer_id as string, payload: apptPayload(a, shopOf(a.shop_id)) })));
+  }
+  // appointment_reminder_today: el día de la cita, desde las 07:00 de Ecuador.
+  // El barrido corre cada minuto, así que "a las 07:00" es "el primer tick en que
+  // ya son las 7" y el dedupe garantiza una sola vez. Condiciones:
+  //   * cita de HOY (día de Ecuador) que todavía no pasó,
+  //   * agendada ANTES de las 07:00 de hoy — una cita creada a las 10 para las 15
+  //     ya recibió su confirmación ese mismo minuto; recordársela también sería
+  //     mandar dos mensajes seguidos.
+  // Por Twilio cada plantilla necesita su ContentSid: sin el de esta, no se encola
+  // nada (encolar sin SID = 5 fallos y la fila muere por el dedupe).
+  {
+    const nowMs = Date.now();
+    const dayStart = ecDayStartMs(nowMs);
+    const sevenAm = new Date(dayStart + 7 * 3600_000).toISOString();
+    const dayEnd = new Date(dayStart + 86_400_000).toISOString();
+    if (ecMinutesOfDay(nowMs) >= 7 * 60 && reminderTodayConfigured()) {
+      const rows = await selectAll<Row>(() =>
+        admin.from("appointments").select(`${apSel}, created_at`)
+          .in("status", ["scheduled", "confirmed"])
+          .gte("scheduled_at", nowIso).lt("scheduled_at", dayEnd)
+          .lt("created_at", sevenAm));
+      scanned += rows.length;
+      enq += await enqueueMissing(admin, "appointment_reminder_today", "appointment",
+        rows.map((a) => ({ id: a.id as string, shop_id: a.shop_id as string, customer_id: a.customer_id as string, payload: apptPayload(a, shopOf(a.shop_id)) })));
+    }
   }
   // appointment_reminder_24h: citas en la ventana [now+23h, now+24h], activas.
   // Solo se pagina: su ventana es por `scheduled_at`, NO por `updated_at` (una
