@@ -88,6 +88,7 @@ El nombre es el valor del enum `notification_template` y es la llave del mapa
 |---|---|---|
 | `appointment_confirmed` | **4** | 1 cliente · 2 vehículo · 3 fecha/hora · 4 firma |
 | `appointment_reminder_24h` | **4** | 1 cliente · 2 vehículo · 3 fecha/hora · 4 firma |
+| `appointment_reminder_today` | **4** | 1 cliente · 2 vehículo · 3 **hora** (solo `HH:MM`, "hoy" va en el cuerpo) · 4 firma |
 | `vehicle_received` | **3** | 1 cliente · 2 vehículo · 3 firma |
 | `quote_ready` | **4** | 1 cliente · 2 vehículo · 3 resumen · 4 firma |
 | `vehicle_ready` | **3** | 1 cliente · 2 vehículo · 3 firma |
