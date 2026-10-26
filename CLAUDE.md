@@ -40,6 +40,7 @@ scripts/            # Tooling de desarrollo (NO lo corre el CLI)
   seed.sql                 # datos demo (requiere pegar 3 UIDs de auth)
   test_isolation.sql       # pruebas de aislamiento RLS
   test_quote_numbering.sql # valida el correlativo por taller de quotes (0012)
+  backfill_vehicle_mileage.sql # backfill único de vehicles.mileage desde el km de las órdenes (import Zoho); dry-run por defecto
 docs/               # runbooks operativos (setup de WhatsApp/email, ventana de deploy)
 CLAUDE.md           # este archivo (raíz del repo)
 README.md
