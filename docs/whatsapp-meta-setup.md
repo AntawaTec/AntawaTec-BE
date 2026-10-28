@@ -369,12 +369,19 @@ cliente (una fila por evento y canal). Workaround operativo: borrar la fila de
 
 ### Números de teléfono
 
-`_shared/phone.ts` normaliza a MSISDN (`593XXXXXXXXX`) antes de llamar a Meta, que
-rechaza cualquier otro formato. La auditoría de prod del 2026-07-30 sobre 18 clientes
-encontró **9** ya en `+593…`, **4** en local `09…`, **3** móviles pelados `9…` y **2**
-irrecuperables (uno de 8 dígitos, uno con el 0 troncal duplicado tras el país) que
-necesitan corrección manual. El front (`normalizeEcMobile` en `src/lib/format.ts`)
-valida y guarda ya normalizado, así que el problema no vuelve a entrar por el alta.
+`_shared/phone.ts` normaliza a MSISDN (`593XXXXXXXXX`, `19547276658`, …) antes de
+llamar al proveedor, que rechaza cualquier otro formato. La auditoría de prod del
+2026-07-30 sobre 18 clientes encontró **9** ya en `+593…`, **4** en local `09…`, **3**
+móviles pelados `9…` y **2** irrecuperables (uno de 8 dígitos, uno con el 0 troncal
+duplicado tras el país) que necesitan corrección manual. El front
+(`normalizeWhatsAppNumber` en `src/lib/format.ts`) valida y guarda ya normalizado, así
+que el problema no vuelve a entrar por el alta.
+
+Desde 2026-10-27 se aceptan también números **fuera de Ecuador** (clientes con línea de
+EE.UU.), con una sola regla: el código de país tiene que venir **explícito** (`+` o `00`
+adelante). Sin él se asume Ecuador como siempre; un `19547276658` pelado queda `failed`
+en vez de adivinar país. `+1` se valida como NANP (área y central no empiezan en 0/1);
+el resto como E.164 de 10 a 15 dígitos.
 
 1. **Secrets de la función** `notification-dispatch`:
    - `WHATSAPP_DRY_RUN=false`
