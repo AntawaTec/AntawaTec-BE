@@ -273,3 +273,11 @@ begin
 
   raise notice 'Seed determinista OK. Taller A = %, Taller B = %', shop_a, shop_b;
 end $$;
+
+-- ---------- Código promocional de prueba (campaña trial, 0048) ----------
+-- Para probar promo-intake en local (`?codigo=PRUEBA30` en la landing): 30 días,
+-- sin tope de usos y sin caducidad. En prod el código de la campaña lo crea el
+-- runbook docs/trial-promo-deploy.md (Paso 4), nunca este seed.
+insert into public.promo_codes (code, trial_days, max_uses, expires_at, active, notes)
+values ('PRUEBA30', 30, null, null, true, 'Código de prueba LOCAL (seed.sql)')
+on conflict (code) do nothing;

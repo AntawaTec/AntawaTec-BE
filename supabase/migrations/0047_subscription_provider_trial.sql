@@ -1,0 +1,21 @@
+-- =============================================================================
+-- 0047_subscription_provider_trial.sql
+-- Agrega 'trial' al enum subscription_provider (hotmart | bank_transfer |
+-- payphone | trial). Es la campaña "30 días gratis por código promocional": el
+-- prospecto canjea un código en la landing (Edge Function `promo-intake`) y
+-- `provisionTenant` le da de alta el taller con una subscription de PRUEBA.
+--
+-- Por qué un valor del enum y no un `plan = 'trial'` sobre bank_transfer: el
+-- admin tiene que distinguir de un vistazo "taller que pagó" de "taller en
+-- prueba", y el recordatorio de vencimiento (`trial-reminder`) filtra por
+-- proveedor. Al aprobar la primera renovación, `subscription-renewal-approval`
+-- convierte la fila a 'bank_transfer' (la auditoría del código canjeado queda en
+-- `promo_redemptions`, 0048).
+--
+-- AISLADO A PROPÓSITO — NO agregar nada más a este archivo: `ALTER TYPE ... ADD
+-- VALUE` no puede usarse en la misma transacción que luego REFERENCIA el valor
+-- nuevo, y Supabase envuelve cada archivo de migración en una transacción (mismo
+-- motivo que 0036). Las tablas del código promocional van en 0048.
+-- =============================================================================
+
+alter type public.subscription_provider add value if not exists 'trial';
