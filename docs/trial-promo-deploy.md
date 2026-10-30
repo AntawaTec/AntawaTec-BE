@@ -150,7 +150,9 @@ select * from public.promo_redemptions order by created_at desc limit 5;   -- sh
 ```
 
 - Llega el invite (magic link) al email de prueba; entrar y ver el dashboard vacío.
-- Repetir el mismo curl: vuelve el **mismo** `shopId` (reintento idempotente).
+- Repetir el mismo curl: ahora responde **409** «Este email ya tiene un taller…» (el canje
+  quedó completo y la invitación ya salió; solo un canje interrumpido antes de crear el
+  usuario se reintenta con 201).
 - Probar el 400: `"code":"NOEXISTE"` → «Este código no es válido o ya venció.»
 
 Tick manual de `trial-reminder` (no manda nada si no hay pruebas a ≤ 7 días):
