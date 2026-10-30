@@ -65,6 +65,7 @@ interface ProofRow {
 
 interface SubscriptionRow {
   id: string;
+  provider: string;
   current_period_end: string | null;
 }
 
@@ -241,7 +242,7 @@ async function loadLatestSubscription(
 ): Promise<SubscriptionRow | null> {
   const { data, error } = await admin
     .from("subscriptions")
-    .select("id, current_period_end")
+    .select("id, provider, current_period_end")
     .eq("shop_id", shopId)
     .order("current_period_end", { ascending: false, nullsFirst: false })
     .limit(1)
@@ -302,6 +303,18 @@ async function lockApproval(
  * Extiende (o crea) la suscripción del taller. El vencimiento resultante es
  * `max(actual, periodEnd)`: comparado en JS y escrito absoluto, así un reintento
  * converge en vez de apilar otro mes.
+ *
+ * Prueba por código (0047): si la fila que se extiende es `provider = 'trial'`,
+ * el MISMO update la convierte a `bank_transfer` + DEFAULT_PLAN. Por qué: el
+ * admin distingue "en prueba" de "pagado" por `provider`, y trial-reminder
+ * filtra por 'trial' — un taller que ya pagó no puede seguir figurando en
+ * prueba ni recibir "tu prueba termina". La auditoría del código canjeado no se
+ * pierde: vive en promo_redemptions (0048), no en la subscription.
+ * Si la conversión choca con subscriptions_shop_provider_unique (el taller ya
+ * tenía una fila bank_transfer, p. ej. un pago anterior), se reintenta el update
+ * SIN tocar provider/plan: lo que no puede fallar es extender el período que el
+ * dueño pagó; la etiqueta queda como estaba, se silencia trial-reminder para esa
+ * fila y se loguea para revisarla a mano.
  */
 async function applySubscription(
   admin: SupabaseClient,
@@ -311,14 +324,48 @@ async function applySubscription(
 ): Promise<void> {
   if (sub) {
     const target = maxDate(parseTimestamp(sub.current_period_end), periodEnd)!;
+    const base = { status: "active", current_period_end: target.toISOString() };
+    const convert = sub.provider === "trial";
     const { error } = await admin
       .from("subscriptions")
-      .update({ status: "active", current_period_end: target.toISOString() })
+      .update(convert ? { ...base, provider: PROVIDER, plan: DEFAULT_PLAN } : base)
       .eq("id", sub.id);
-    if (error) {
-      throw new Error(`No se pudo extender la subscription: ${error.message}`);
+    if (!error) return;
+
+    if (
+      convert &&
+      error.code === "23505" &&
+      error.message?.includes("subscriptions_shop_provider_unique")
+    ) {
+      console.warn(
+        `${LABEL}: shop ${shopId} ya tiene subscription ${PROVIDER}; la fila trial ` +
+          `${sub.id} se extiende SIN convertir (revisar a mano).`,
+      );
+      const { error: retryErr } = await admin
+        .from("subscriptions")
+        .update(base)
+        .eq("id", sub.id);
+      if (retryErr) {
+        throw new Error(`No se pudo extender la subscription: ${retryErr.message}`);
+      }
+      // La fila sigue diciendo 'trial' pero el taller YA pagó: marcar el aviso
+      // como enviado para que trial-reminder no le escriba "tu prueba termina"
+      // 7 días antes del período que acaba de pagar. Condicional a null para no
+      // pisar la fecha de un aviso que sí salió. Best-effort: no tumba la
+      // aprobación (el período ya quedó extendido).
+      const { error: markErr } = await admin
+        .from("subscriptions")
+        .update({ trial_reminder_sent_at: new Date().toISOString() })
+        .eq("id", sub.id)
+        .is("trial_reminder_sent_at", null);
+      if (markErr) {
+        console.error(
+          `${LABEL}: no se pudo silenciar trial-reminder en ${sub.id}: ${markErr.message}`,
+        );
+      }
+      return;
     }
-    return;
+    throw new Error(`No se pudo extender la subscription: ${error.message}`);
   }
 
   // Sin suscripción previa (taller migrado a mano, o import): crearla.

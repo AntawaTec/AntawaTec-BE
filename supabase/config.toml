@@ -451,6 +451,15 @@ verify_jwt = false
 [functions.payphone-confirm]
 verify_jwt = false
 
+# promo-intake: la invoca un PROSPECTO ANÓNIMO desde la landing estática para
+# canjear un código de prueba gratis (no hay JWT posible: el usuario todavía no
+# existe). verify_jwt = false; la defensa es validación estricta in-code
+# (_shared/prospect.ts + formato de código y teléfono), honeypot, el propio código
+# (activo / no vencido / con cupo), un canje por (código, email) y 409 si el email
+# ya tiene cuenta. El service_role nunca sale de la función.
+[functions.promo-intake]
+verify_jwt = false
+
 # technician-access: la invoca el DUEÑO del taller desde el navegador (alta y
 # revocación del login de un técnico). verify_jwt = false por el mismo racional
 # que bank-transfer-approval: el preflight OPTIONS del navegador no lleva
@@ -472,6 +481,13 @@ verify_jwt = false
 # función (mismo patrón que `hottok` en hotmart-webhook). En prod CRON_SECRET DEBE
 # estar seteado; en dev local sin secret la función permite invocación directa.
 [functions.notification-dispatch]
+verify_jwt = false
+
+# trial-reminder: la invoca pg_cron una vez al día (job `trial-reminder`, 0048), que
+# no puede mandar un JWT de Supabase. Mismo racional que notification-dispatch: la
+# auth real es el header x-cron-secret == CRON_SECRET, validado DENTRO de la
+# función. En prod CRON_SECRET DEBE estar seteado; en dev local sin secret permite.
+[functions.trial-reminder]
 verify_jwt = false
 
 # whatsapp-webhook: lo invoca META, que no puede mandar un JWT de Supabase.

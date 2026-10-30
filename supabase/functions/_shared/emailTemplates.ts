@@ -72,7 +72,8 @@ export interface RenderedEmail {
 // TODO dato dinámico pasa por acá antes de entrar al HTML. No es paranoia: las
 // descripciones de ítems y el nombre del taller son texto libre tipeado en la PWA,
 // y un "<" suelto rompe el correo (o peor) en el cliente del destinatario.
-function esc(s: unknown): string {
+// Exportada para que trialReminderEmail.ts escape con EXACTAMENTE la misma regla.
+export function esc(s: unknown): string {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

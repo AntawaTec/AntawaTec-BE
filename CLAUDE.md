@@ -174,6 +174,12 @@ nunca suma dos meses. Procedimientos (alta de un `antawa_admin` + el flujo enter
 en `docs/admin-onboarding.md`. **No hay corte automático por vencimiento en V1**:
 suspender sigue siendo manual.
 
+**Prueba gratis por código** (`0047`/`0048`, campaña 2026-10): cuarto camino del embudo,
+sin pago. La landing llama a `promo-intake` (anónima), que da de alta el taller al instante
+con `provider = 'trial'` y `plan = <código>`; `trial-reminder` avisa 7 días antes del
+vencimiento y el admin suspende a mano. La primera renovación aprobada convierte la
+subscription en `bank_transfer`; la auditoría del canje queda en `promo_redemptions`.
+
 ## Notificaciones
 WhatsApp Cloud API (Meta, oficial) primario; Resend para el email. **7 plantillas**
 (`notification_template`): `appointment_confirmed`, `appointment_reminder_24h`,
@@ -269,6 +275,17 @@ terminales: `0041` + `docs/order-emails-deploy.md` (pares nuevos) y `0044` +
 - `owner-access`: el admin restaura el acceso del DUEÑO de un taller (`status` /
   `reinvite` / `set_password`) cuando el magic link no le funciona. Auth in-code vía
   `_shared/requireAdmin.ts`; solo resuelve el profile `shop_owner` del taller pedido.
+- `promo-intake`: alta de un taller en PRUEBA GRATIS por código promocional (`0047`/`0048`),
+  invocada ANÓNIMA desde la landing (contrato congelado: la landing muestra el `error` tal
+  cual). Valida el código (`promo_codes`), inserta el canje (`promo_redemptions`, único por
+  código+email = ancla del reintento), 409 si el email ya tiene cuenta y provisiona con
+  `provider = 'trial'` + `trial_days` del código.
+- `trial-reminder`: cron diario (`0 13 * * *`, 08:00 EC). Un correo al dueño 7 días antes de
+  que venza su prueba; idempotente por `subscriptions.trial_reminder_sent_at`. **No suspende.**
+- Enum `subscription_provider` += `'trial'` (`0047`, aislada). `subscription-renewal-approval`
+  convierte la fila `trial` → `bank_transfer`/`mensual` al aprobar la primera renovación (si
+  el taller ya tenía fila `bank_transfer`, extiende la `trial` sin convertir y silencia el
+  recordatorio). Runbook: `docs/trial-promo-deploy.md`.
 - Secretos con `Deno.env.get(...)`; nunca hardcodear.
 - Webhooks y provisioning **idempotentes**. Códigos HTTP y errores consistentes.
 
