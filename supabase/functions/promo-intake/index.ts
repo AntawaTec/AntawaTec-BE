@@ -27,10 +27,10 @@
 //
 // Re-entrada (doble submit / red que se corta): el canje se inserta ANTES de
 // provisionar y es único por (código, email). Si ya existe, es el mismo
-// prospecto reintentando: se reusa la fila, se saltan el 409 y el tope de usos
-// (ese cupo ya lo consumió él) y provisionTenant completa lo que haya faltado.
-// La cuenta que pueda existir en ese caso la creó ESTE flujo: el chequeo de
-// cuenta corre antes del insert del canje.
+// prospecto reintentando: se reusa la fila y se salta el tope de usos (ese cupo
+// ya lo consumió él). Si además ya existe su usuario de auth, la corrida
+// anterior llegó a invitarlo → 409 (el acceso ya le llegó; no hay email nuevo
+// que mandar). Si no existe, provisionTenant completa lo que haya faltado.
 //
 // Defensa (sin captcha en V1): validación estricta in-code, honeypot, el código
 // mismo (activo / no vencido / con cupo) y el unique por email. Las escrituras
@@ -131,8 +131,18 @@ Deno.serve(async (req) => {
       return badRequest(MSG_INVALID_CODE);
     }
 
-    // ¿Reintento del mismo prospecto? (ver cabecera: salta el 409 y el tope)
+    // ¿Reintento del mismo prospecto? (ver cabecera: salta el tope de usos)
     let redemptionId = await findRedemptionId(admin, code, email);
+
+    if (redemptionId && (await findAuthUserByEmail(admin, email))) {
+      // El canje existe Y la cuenta ya se creó: la corrida anterior llegó hasta
+      // la invitación (inviteOwner es el paso que crea el usuario), así que el
+      // correo con el acceso YA salió. Volver a provisionar sería un no-op sin
+      // email nuevo y la landing le diría "te enviamos el enlace" en falso. El
+      // 409 lo manda a donde tiene que ir: a entrar con el enlace que ya tiene.
+      console.log(`${LABEL}: ${email} reintenta un canje ya completado; 409.`);
+      return json(409, { error: MSG_ALREADY_HAS_SHOP });
+    }
 
     if (!redemptionId) {
       // 3.b) Tope de usos. Carrera aceptada: dos canjes simultáneos con el
