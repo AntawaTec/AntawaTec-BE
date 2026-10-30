@@ -2,7 +2,8 @@
 // _shared/provisionTenant.ts
 // Provisioning idempotente y re-entrante de un tenant (taller) del ecosistema
 // Antawa. Es un módulo COMPARTIDO, no una Edge Function HTTP: lo invocan tanto
-// `hotmart-webhook` como `bank-transfer-approval`.
+// `hotmart-webhook` como `bank-transfer-approval` (y `payphone-confirm`,
+// `promo-intake`).
 //
 // Por qué re-entrante en vez de transaccional:
 //   Crear el usuario de auth (auth.admin.inviteUserByEmail) vive en GoTrue, un
@@ -36,7 +37,7 @@ import { findAuthUserByEmail, isAlreadyRegistered } from "./authAdmin.ts";
 
 // --- Tipos públicos ----------------------------------------------------------
 
-export type ProvisionProvider = "hotmart" | "bank_transfer" | "payphone";
+export type ProvisionProvider = "hotmart" | "bank_transfer" | "payphone" | "trial";
 
 export interface ProvisionTenantInput {
   /** Razón social del taller -> shops.name y base del slug. */
@@ -52,6 +53,19 @@ export interface ProvisionTenantInput {
    * El caller la pasa desde su propio entorno; el módulo se mantiene libre de env.
    */
   redirectTo?: string;
+  /**
+   * Días del primer período (→ subscriptions.current_period_end). Default 30,
+   * que es lo que cobran los caminos pagos. La prueba por código (promo-intake)
+   * pasa los `trial_days` del código. Solo aplica al CREAR la subscription: una
+   * re-entrada no mueve el vencimiento de una fila existente.
+   */
+  periodDays?: number;
+  /**
+   * Teléfono del dueño (→ shops.contact_phone) SOLO al crear el shop. En un
+   * shop existente no se pisa: ahí el teléfono ya es del dueño (lo edita en
+   * Configuración) y un reintento no debe revertir su cambio.
+   */
+  contactPhone?: string | null;
 }
 
 export interface ProvisionTenantResult {
@@ -64,7 +78,8 @@ export interface ProvisionTenantResult {
 /** Roles de plataforma (enum public.user_role). */
 type ProvisionRole = "antawa_admin" | "shop_owner";
 
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_PERIOD_DAYS = 30;
 
 // Cuántas veces reintentar la LECTURA del shop ajeno tras un 23505 por
 // contact_email (defensa ante lag de réplica de lectura). Si se agota, se aborta.
@@ -134,7 +149,7 @@ export async function provisionTenant(
     if (orphan) {
       shop = orphan;
     } else {
-      const result = await createShop(admin, businessName, email);
+      const result = await createShop(admin, businessName, email, input.contactPhone);
       shop = { id: result.id };
       created = result.created;
     }
@@ -146,7 +161,7 @@ export async function provisionTenant(
 
   // 5) Asegurar el profile (PK = ownerUserId) y la subscription. Idempotentes.
   await ensureProfile(admin, ownerUserId, shop.id, businessName);
-  await ensureSubscription(admin, shop.id, input.provider, input.plan);
+  await ensureSubscription(admin, shop.id, input.provider, input.plan, input.periodDays);
 
   return { shopId: shop.id, ownerUserId, created };
 }
@@ -200,8 +215,10 @@ async function createShop(
   admin: SupabaseClient,
   businessName: string,
   email: string,
+  contactPhone?: string | null,
 ): Promise<{ id: string; created: boolean }> {
   const base = slugify(businessName);
+  const phone = (contactPhone ?? "").trim() || null;
   let n = 0;
   for (let tries = 0; tries < 50; tries++) {
     const slug = n === 0 ? base : `${base}-${n + 1}`;
@@ -225,6 +242,7 @@ async function createShop(
         slug,
         status: "active",
         contact_email: email,
+        ...(phone ? { contact_phone: phone } : {}),
         subscription_status: "active", // espejo denormalizado; la verdad está en subscriptions
         activated_at: new Date().toISOString(),
       })
@@ -367,6 +385,7 @@ async function ensureSubscription(
   shopId: string,
   provider: ProvisionProvider,
   plan?: string,
+  periodDays?: number,
 ): Promise<void> {
   const { data: existing, error: selErr } = await admin
     .from("subscriptions")
@@ -377,7 +396,12 @@ async function ensureSubscription(
   if (selErr) throw new Error(`Lectura de subscription falló: ${selErr.message}`);
   if (existing && existing.length > 0) return;
 
-  const currentPeriodEnd = new Date(Date.now() + THIRTY_DAYS_MS).toISOString();
+  // Un valor raro (0, negativo, NaN) cae al default en vez de crear una
+  // subscription ya vencida: el caller valida, esto es solo el backstop.
+  const days = typeof periodDays === "number" && Number.isFinite(periodDays) && periodDays > 0
+    ? periodDays
+    : DEFAULT_PERIOD_DAYS;
+  const currentPeriodEnd = new Date(Date.now() + days * DAY_MS).toISOString();
   const { error } = await admin.from("subscriptions").insert({
     shop_id: shopId,
     provider,
