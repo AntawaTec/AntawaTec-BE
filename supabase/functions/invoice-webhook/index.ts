@@ -103,7 +103,7 @@ Deno.serve(async (req) => {
           outcome: "failed",
           document: evt.document,
           message: userMessage(evt.document.errors) ??
-            "El proveedor no pudo completar la emisión después de varios reintentos. Volvé a emitirla.",
+            "El proveedor no pudo completar la emisión después de varios reintentos. Vuelve a emitirla.",
         };
         break;
       default:

@@ -109,7 +109,7 @@ Deno.serve(async (req) => {
   } catch (e) {
     if (e instanceof ProviderError) return providerFailure(e, action);
     console.error(`${LABEL}: error en ${action} (taller ${shopId}):`, e instanceof Error ? e.message : e);
-    return serverError("No se pudo completar la operación. Probá de nuevo.");
+    return serverError("No se pudo completar la operación. Intenta de nuevo.");
   }
   return serverError("Acción no implementada.");
 });
@@ -118,14 +118,14 @@ Deno.serve(async (req) => {
 function providerFailure(e: ProviderError, action: string): Response {
   console.error(`${LABEL}: proveedor falló en ${action}: ${e.kind} ${e.status ?? ""} ${e.providerMessage ?? ""}`);
   if (e.kind !== "http" || e.status === null || e.status >= 500 || e.status === 429) {
-    return json(502, { error: "El proveedor de facturación no respondió. Probá de nuevo en unos minutos." });
+    return json(502, { error: "El proveedor de facturación no respondió. Intenta de nuevo en unos minutos." });
   }
   if (e.status === 401 || e.status === 403) {
-    return json(502, { error: "El proveedor de facturación rechazó nuestras credenciales. Avisá a soporte de Antawa." });
+    return json(502, { error: "El proveedor de facturación rechazó nuestras credenciales. Avisa a soporte de Antawa." });
   }
   const detail = e.providerMessage ? `: ${e.providerMessage}` : ".";
   if (action === "upload_certificate") {
-    return badRequest(`No se pudo validar la firma (revisá el archivo .p12 y su clave)${detail}`);
+    return badRequest(`No se pudo validar la firma (revisa el archivo .p12 y su clave)${detail}`);
   }
   return json(e.status === 409 ? 409 : 400, { error: `El proveedor de facturación rechazó los datos${detail}` });
 }
@@ -251,7 +251,7 @@ async function saveFiscal(
       const ref = await provider.findCompanyByRuc(ruc);
       if (!ref || ref.companyId !== companyId) {
         console.error(`${LABEL}: taller ${shopId} con empresa ${companyId} sin API key recuperable.`);
-        return serverError("No se pudo recuperar la credencial del proveedor. Avisá a soporte de Antawa.");
+        return serverError("No se pudo recuperar la credencial del proveedor. Avisa a soporte de Antawa.");
       }
       await setProviderKey(admin, shopId, ref.apiKey);
     }
@@ -326,7 +326,7 @@ async function saveFiscal(
 
 function rucTaken(): Response {
   return json(409, {
-    error: "Ese RUC ya está configurado en otro taller de AntawaTec. Escribinos a soporte si es una sucursal tuya.",
+    error: "Ese RUC ya está configurado en otro taller de AntawaTec. Escríbenos a soporte si es una sucursal tuya.",
   });
 }
 
@@ -340,7 +340,7 @@ async function uploadCertificate(
   body: Record<string, any>,
 ): Promise<Response> {
   const settings = await loadSettings(admin, shopId);
-  if (!settings?.provider_company_id) return json(409, { error: "Primero guardá los datos fiscales del taller." });
+  if (!settings?.provider_company_id) return json(409, { error: "Primero guarda los datos fiscales del taller." });
 
   const password = typeof body.password === "string" ? body.password : "";
   if (!password) return badRequest("Falta la clave de la firma electrónica.");
@@ -396,10 +396,10 @@ async function setEnvironment(
   const env = body.environment;
   if (env !== "test" && env !== "production") return badRequest("environment debe ser 'test' o 'production'.");
   const settings = await loadSettings(admin, shopId);
-  if (!settings?.provider_company_id) return json(409, { error: "Primero guardá los datos fiscales del taller." });
+  if (!settings?.provider_company_id) return json(409, { error: "Primero guarda los datos fiscales del taller." });
   if (settings.environment === env) return ok({ settings: settingsView(settings), unchanged: true });
   if (env === "production" && !certValid(settings, Date.now())) {
-    return json(409, { error: "Subí una firma electrónica vigente antes de pasar a producción." });
+    return json(409, { error: "Sube una firma electrónica vigente antes de pasar a producción." });
   }
   // Una factura en vuelo se resuelve contra el ambiente con que se emitió: no se
   // cambia el ambiente de la empresa debajo de ella.
@@ -410,7 +410,7 @@ async function setEnvironment(
     .eq("status", "processing");
   if (cErr) throw new Error(`Chequeo de facturas en emisión falló: ${cErr.message}`);
   if ((count ?? 0) > 0) {
-    return json(409, { error: "Hay facturas en emisión. Esperá a que terminen antes de cambiar de ambiente." });
+    return json(409, { error: "Hay facturas en emisión. Espera a que terminen antes de cambiar de ambiente." });
   }
 
   await provider.setEnvironment(settings.provider_company_id, env);

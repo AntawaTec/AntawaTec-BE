@@ -176,7 +176,7 @@ export class AutorizadorEcProvider implements BillingProvider {
             "http",
             "La empresa ya existe en AutorizadorEC pero su API key no está disponible.",
             409,
-            "la empresa ya existe en el proveedor pero su credencial no está disponible; avisá a soporte de Antawa",
+            "la empresa ya existe en el proveedor pero su credencial no está disponible; avisa a soporte de Antawa",
           );
         }
         return { companyId: String(row.id), apiKey };
@@ -548,7 +548,7 @@ function fromError(e: unknown, phase: "lookup" | "create" | "correct"): Emission
     return {
       outcome: "failed",
       document: null,
-      message: "Ya existe un comprobante idéntico (mismo comprador, fecha, monto y detalle). Revisá si esta venta ya se facturó.",
+      message: "Ya existe un comprobante idéntico (mismo comprador, fecha, monto y detalle). Revisa si esta venta ya se facturó.",
       httpStatus: status,
     };
   }

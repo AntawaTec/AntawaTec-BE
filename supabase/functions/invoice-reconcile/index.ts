@@ -118,7 +118,7 @@ async function reconcileOne(
     await applyEmissionResult(admin, row.id, {
       outcome: "failed",
       document: null,
-      message: "El taller no tiene credencial del proveedor de facturación. Revisá la configuración.",
+      message: "El taller no tiene credencial del proveedor de facturación. Revisa la configuración.",
     }, ["processing"]);
     return "failed";
   }
@@ -164,7 +164,7 @@ async function reconcileOne(
     await applyEmissionResult(admin, row.id, {
       outcome: "failed",
       document: doc,
-      message: "El SRI no respondió después de varios reintentos. Volvé a emitir la factura más tarde.",
+      message: "El SRI no respondió después de varios reintentos. Vuelve a emitir la factura más tarde.",
     }, ["processing"]);
     return "failed";
   }

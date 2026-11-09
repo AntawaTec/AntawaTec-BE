@@ -117,7 +117,7 @@ Deno.serve(async (req) => {
     }
   } catch (e) {
     console.error(`${LABEL}: error en ${action} de la factura ${invoiceId}:`, e instanceof Error ? e.message : e);
-    return serverError("No se pudo completar la operación. Probá de nuevo.");
+    return serverError("No se pudo completar la operación. Intenta de nuevo.");
   }
 });
 
@@ -137,18 +137,18 @@ async function emit(admin: SupabaseClient, shopId: string, invoice: InvoiceRow):
   const nowMs = Date.now();
   const settings = await loadSettings(admin, shopId);
   if (!settings || !settings.provider_company_id) {
-    return conflict("Completá los datos fiscales y subí la firma electrónica en Configuración antes de facturar.");
+    return conflict("Completa los datos fiscales y sube la firma electrónica en Configuración antes de facturar.");
   }
   if (!certValid(settings, nowMs)) {
-    return conflict("La firma electrónica está vencida o no fue cargada. Subí una vigente en Configuración.");
+    return conflict("La firma electrónica está vencida o no fue cargada. Sube una vigente en Configuración.");
   }
   if (!settings.ready) {
-    return conflict("La configuración de facturación está incompleta. Revisala en Configuración.");
+    return conflict("La configuración de facturación está incompleta. Revísala en Configuración.");
   }
   const apiKey = await getProviderKey(admin, shopId);
   if (!apiKey) {
     console.error(`${LABEL}: taller ${shopId} con settings.ready pero sin API key en Vault.`);
-    return conflict("La configuración de facturación está incompleta. Volvé a guardar los datos fiscales.");
+    return conflict("La configuración de facturación está incompleta. Vuelve a guardar los datos fiscales.");
   }
 
   // 3) Pre-validación sin lock (con la fecha y serie que se van a usar).
@@ -172,7 +172,7 @@ async function emit(admin: SupabaseClient, shopId: string, invoice: InvoiceRow):
   }
   if (!lock) {
     const fresh = await loadInvoice(admin, invoice.id, shopId);
-    return conflict("Esta factura ya se está emitiendo o ya fue emitida. Recargá para ver su estado.", fresh);
+    return conflict("Esta factura ya se está emitiendo o ya fue emitida. Recarga para ver su estado.", fresh);
   }
   const previous = lock.previous_status as "draft" | "failed";
 
@@ -261,7 +261,7 @@ async function reopen(admin: SupabaseClient, shopId: string, invoice: InvoiceRow
   if (error) throw new Error(`reopen falló: ${error.message}`);
   if (!data) {
     const fresh = await loadInvoice(admin, invoice.id, shopId);
-    return conflict("La factura cambió de estado. Recargá para verla.", fresh);
+    return conflict("La factura cambió de estado. Recarga para verla.", fresh);
   }
   return ok({ invoice: invoiceView(data as unknown as InvoiceRow) });
 }
@@ -284,7 +284,7 @@ async function markVoided(admin: SupabaseClient, shopId: string, invoice: Invoic
   if (error) throw new Error(`mark_voided falló: ${error.message}`);
   if (!data) {
     const fresh = await loadInvoice(admin, invoice.id, shopId);
-    return conflict("La factura cambió de estado. Recargá para verla.", fresh);
+    return conflict("La factura cambió de estado. Recarga para verla.", fresh);
   }
   return ok({ invoice: invoiceView(data as unknown as InvoiceRow) });
 }
@@ -303,7 +303,7 @@ async function refreshFiles(admin: SupabaseClient, shopId: string, invoice: Invo
   const { row, errors } = await storeInvoiceFiles(admin, provider, apiKey, invoice);
   if (errors.length > 0 && (!row.xml_path || !row.ride_path)) {
     return json(502, {
-      error: "No pudimos descargar los archivos de la factura del proveedor. Probá de nuevo en unos minutos.",
+      error: "No pudimos descargar los archivos de la factura del proveedor. Intenta de nuevo en unos minutos.",
       invoice: invoiceView(row),
     });
   }

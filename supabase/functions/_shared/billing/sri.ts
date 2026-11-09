@@ -443,7 +443,7 @@ export function validateDraft(buyer: DraftBuyer, totals: InvoiceTotals, paymentM
     if (buyer.buyer_id_type === "consumidor_final" && totals.total > CONSUMIDOR_FINAL_MAX_TOTAL) {
       errors.push(
         `Una factura a consumidor final no puede superar USD ${CONSUMIDOR_FINAL_MAX_TOTAL}. ` +
-          "Pedile al cliente su cédula o RUC.",
+          "Pídele al cliente su cédula o RUC.",
       );
     }
   }
