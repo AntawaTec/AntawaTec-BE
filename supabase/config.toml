@@ -506,6 +506,29 @@ verify_jwt = false
 [functions.twilio-status-webhook]
 verify_jwt = false
 
+# billing-setup / invoice-emit: las invoca el DUEÑO desde la PWA (configuración
+# fiscal y emisión de facturas SRI). Mismo racional que technician-access: el
+# preflight OPTIONS del navegador no lleva Authorization y con verify_jwt = true
+# moriría con 401 antes del CORS. La auth real (JWT contra GoTrue + rol shop_owner
+# + taller con billing_enabled, vía _shared/requireOwner.ts) va DENTRO.
+[functions.billing-setup]
+verify_jwt = false
+
+[functions.invoice-emit]
+verify_jwt = false
+
+# invoice-webhook: lo invoca AUTORIZADOREC (proveedor de facturación), que no
+# puede mandar un JWT de Supabase. La auth real va DENTRO: HMAC-SHA256 del cuerpo
+# crudo con AUTORIZADOREC_WEBHOOK_SECRET. Sin ese secret la función RECHAZA todo.
+[functions.invoice-webhook]
+verify_jwt = false
+
+# invoice-reconcile: la invoca pg_cron cada 5 min (job `invoice-reconcile`, 0053).
+# Auth real: x-cron-secret == CRON_SECRET, DENTRO de la función. A diferencia de
+# notification-dispatch, sin CRON_SECRET configurado RECHAZA la invocación.
+[functions.invoice-reconcile]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
