@@ -36,16 +36,15 @@
 
 import { createAdminClient, type SupabaseClient } from "../_shared/supabaseAdmin.ts";
 import { findAuthUserByEmail, isAlreadyRegistered } from "../_shared/authAdmin.ts";
+import { requireShopOwner } from "../_shared/requireOwner.ts";
 import {
   badRequest,
-  forbidden,
   json,
   methodNotAllowed,
   notFound,
   ok,
   preflight,
   serverError,
-  unauthorized,
 } from "../_shared/response.ts";
 
 const MIN_PASSWORD_LENGTH = 8; // alineado con SecuritySection del FE (GoTrue exige 6)
@@ -81,34 +80,18 @@ Deno.serve(async (req) => {
     return serverError("Configuración del servidor incompleta.");
   }
 
-  // 2) Identidad del caller: Bearer validado criptográficamente por GoTrue.
-  const token = extractBearer(req.headers.get("Authorization"));
-  if (!token) return unauthorized("Falta el token de autorización.");
-
-  const { data: userData, error: userErr } = await admin.auth.getUser(token);
-  if (userErr || !userData?.user) {
-    return unauthorized("Token inválido o expirado.");
-  }
-  const callerId = userData.user.id;
-
-  // 3) Autorización: solo el dueño del taller gestiona accesos.
-  const { data: callerProfile, error: profileErr } = await admin
-    .from("profiles")
-    .select("role, shop_id")
-    .eq("id", callerId)
-    .maybeSingle();
-  if (profileErr) {
-    console.error("technician-access: lectura de profile falló:", profileErr);
-    return serverError("No se pudo verificar el rol del usuario.");
-  }
-  if (
-    !callerProfile ||
-    callerProfile.role !== "shop_owner" ||
-    !callerProfile.shop_id
-  ) {
-    return forbidden("Solo el dueño del taller puede gestionar accesos.");
-  }
-  const shopId = callerProfile.shop_id as string;
+  // 2) Identidad del caller (Bearer validado por GoTrue) y 3) autorización: solo
+  //    el dueño del taller gestiona accesos. Compartido en _shared/requireOwner.ts
+  //    (mismos códigos y mensajes que tenía inline).
+  const owner = await requireShopOwner(
+    admin,
+    req,
+    "technician-access",
+    "Solo el dueño del taller puede gestionar accesos.",
+  );
+  if (!owner.ok) return owner.response;
+  const callerId = owner.userId;
+  const shopId = owner.shopId;
 
   // 4) Body.
   let body: RequestBody;
@@ -506,13 +489,6 @@ function isUserNotFound(error: { code?: string; message?: string; status?: numbe
     error?.status === 404 ||
     (error?.message ?? "").toLowerCase().includes("user not found")
   );
-}
-
-function extractBearer(authHeader: string | null): string | null {
-  if (!authHeader) return null;
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
-  const token = match?.[1]?.trim();
-  return token ? token : null;
 }
 
 function normalizeEmail(email: unknown): string {
