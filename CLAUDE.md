@@ -31,14 +31,14 @@ migración directa. Base de datos **Postgres**. Desarrollo solo, asistido por IA
 ## Estructura de carpetas
 ```
 supabase/
-  migrations/       # 0001_foundation.sql ... 0044_*.sql. NUNCA editar una aplicada.
+  migrations/       # 0001_foundation.sql ... 0053_*.sql. NUNCA editar una aplicada.
   functions/        # Edge Functions (una carpeta por función con index.ts)
     _shared/        # Código compartido entre funciones
   config.toml
 scripts/            # Tooling de desarrollo (NO lo corre el CLI)
   verify_schema_rows.sql   # auditoría read-only del schema
   seed.sql                 # datos demo (requiere pegar 3 UIDs de auth)
-  test_isolation.sql       # pruebas de aislamiento RLS
+  test_isolation.sql       # pruebas de aislamiento RLS (bloques 5–7 de facturación: auto-verificables)
   test_quote_numbering.sql # valida el correlativo por taller de quotes (0012)
   backfill_vehicle_mileage.sql # backfill único de vehicles.mileage desde el km de las órdenes (import Zoho); dry-run por defecto
 docs/               # runbooks operativos (setup de WhatsApp/email, ventana de deploy)
@@ -92,7 +92,7 @@ README.md
     `unique(id, shop_id)` en la tabla destino), ej. `work_orders.quote_id → quotes(id, shop_id)`.
 
 ## Modelo de datos
-23 tablas + vista `v_product_stock`. Detalle columna por columna en `migrations/`.
+33 tablas + vista `v_product_stock`. Detalle columna por columna en `migrations/`.
 Dominios: tenancy/identidad · clientes/vehículos · catálogo de inventario ·
 cotización · citas · órdenes de trabajo · movimientos de inventario · plataforma/admin.
 
@@ -139,12 +139,14 @@ Essential Reports (vistas/consultas) · **Admin Dashboard** (cross-shop).
 
 ## Storage
 Buckets **privados** (`vehicle-media`, `signatures`, `documents`, `pdfs`,
-`payment-proofs`). Convención de ruta: **`{shop_id}/...`** — las políticas verifican
+`payment-proofs`, `invoices`). Convención de ruta: **`{shop_id}/...`** — las políticas verifican
 `(storage.foldername(name))[1] = current_shop_id()`. Servir archivos con signed URLs.
 `payment-proofs` es especial: el ALTA la escribe una Edge Function (service role) en
 `intake/{proofId}/` antes de existir el tenant y solo la lee el admin; desde `0043` el
 dueño además escribe y lee su propia subcarpeta `{shop_id}/renewals/…` (comprobantes de
 renovación), sin ver los de nadie más.
+`invoices` (`0052`) guarda el XML autorizado y el RIDE de cada factura en
+`{shop_id}/{invoice_id}/`: dueño y admin solo LEEN; escribe solo el service_role.
 
 `shop-logos` (`0014`) es el ÚNICO bucket **público** (el logo va en cotizaciones impresas /
 PWA; no vale firmar cada render): lectura pública sin signed URL, escritura aislada por
@@ -271,7 +273,18 @@ terminales: `0041` + `docs/order-emails-deploy.md` (pares nuevos) y `0044` +
   `_shared/subscriptionPeriod.ts` (con tests).
 - `technician-access`: alta (invite por email / contraseña temporal) y revocación del
   login de un técnico, invocada por el owner desde la PWA. Auth in-code (JWT + rol
-  shop_owner + tenancy del técnico); re-entrante con marker en `user_metadata`.
+  shop_owner, vía `_shared/requireOwner.ts` + tenancy del técnico); re-entrante con
+  marker en `user_metadata`.
+- **Facturación electrónica SRI** (`0049`–`0053`, proveedor AutorizadorEC multiempresa,
+  aislado en `_shared/billing/`): `billing-setup` (dueño: datos fiscales, firma `.p12`
+  que nunca se persiste, ambiente) e `invoice-emit` (dueño: `emit` / `reopen` /
+  `mark_voided` / `refresh_files`), ambas con `_shared/requireOwner.ts` y exigiendo
+  `shops.billing_enabled`; `invoice-webhook` (HMAC del proveedor; rechaza si falta el
+  secret) e `invoice-reconcile` (cron 5 min; rechaza si falta `CRON_SECRET`). La API key
+  del proveedor por taller vive en **Vault**. Sin dry-run: sin credenciales → 500.
+  `_shared/billing/sri.ts` (validadores, totales, payload) es PURO y lo espeja el FE en
+  `src/lib/sri.ts`: cambiarlo en los dos repos en el mismo lote. Runbook:
+  `docs/billing-deploy.md`.
 - `owner-access`: el admin restaura el acceso del DUEÑO de un taller (`status` /
   `reinvite` / `set_password`) cuando el magic link no le funciona. Auth in-code vía
   `_shared/requireAdmin.ts`; solo resuelve el profile `shop_owner` del taller pedido.
