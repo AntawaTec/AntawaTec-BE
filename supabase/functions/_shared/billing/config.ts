@@ -41,8 +41,16 @@ export function webhookSecretFromEnv(): string | null {
   return s || null;
 }
 
-/** URL pública de invoice-webhook que se registra en cada empresa del proveedor. */
+/**
+ * URL pública de invoice-webhook que se registra en cada empresa del proveedor.
+ * Por defecto se deriva de SUPABASE_URL (hosted: https://<ref>.supabase.co).
+ * AUTORIZADOREC_WEBHOOK_URL la sobrescribe: en local SUPABASE_URL es http://…
+ * y el proveedor la rechaza ("webhookUrl debe ser una URL válida", visto el
+ * 2026-11-10), así que ahí se apunta a una URL https nuestra que no haga nada.
+ */
 export function webhookUrlFromEnv(): string | null {
+  const override = (Deno.env.get("AUTORIZADOREC_WEBHOOK_URL") ?? "").trim();
+  if (override) return override;
   const base = (Deno.env.get("SUPABASE_URL") ?? "").trim().replace(/\/+$/, "");
   return base ? `${base}/functions/v1/invoice-webhook` : null;
 }

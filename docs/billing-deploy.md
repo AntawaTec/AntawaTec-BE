@@ -63,7 +63,8 @@ select count(*) from vault.secrets;  -- no falla
 | `AUTORIZADOREC_BASE_URL` | `https://api.autorizadorec.com/api/v1` |
 | `AUTORIZADOREC_ACCOUNT_KEY` | la `ak_…` de la cuenta multiempresa |
 | `AUTORIZADOREC_WEBHOOK_SECRET` | un valor aleatorio largo (p. ej. `openssl rand -hex 32`) |
-| `AUTORIZADOREC_PLAN_ID` | el `planId` acordado (ver `GET /client/companies/plans/available`) |
+| `AUTORIZADOREC_PLAN_ID` | `7` (Bajo Demanda: USD 5 + 0,05/doc, pruebas gratis; elegido 2026-11-10) |
+| `AUTORIZADOREC_WEBHOOK_URL` | opcional; en hosted NO se setea (sale de `SUPABASE_URL`). Solo en local |
 | `CRON_SECRET` | ya existe (el de `notification-dispatch`); verificar que esté |
 
 El `AUTORIZADOREC_WEBHOOK_SECRET` se registra en cada empresa al crearla
