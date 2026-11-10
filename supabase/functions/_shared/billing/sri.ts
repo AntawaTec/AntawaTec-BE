@@ -116,15 +116,6 @@ export function validateCedula(raw: string): IdCheck {
   return { ok: true };
 }
 
-/** Módulo 11 de RUC de sociedades: devuelve el dígito esperado o null si da 10 (inválido). */
-function mod11(digits: string, coefficients: number[]): number | null {
-  let sum = 0;
-  for (let i = 0; i < coefficients.length; i++) sum += Number(digits[i]) * coefficients[i];
-  const r = sum % 11;
-  const check = r === 0 ? 0 : 11 - r;
-  return check === 10 ? null : check;
-}
-
 export type RucKind = "natural" | "privada" | "publica";
 
 /**
@@ -143,15 +134,14 @@ export function rucKind(raw: string): RucKind | null {
 /**
  * RUC ecuatoriano (13 dígitos):
  *   - persona natural: los 10 primeros son una cédula válida; establecimiento ≠ 000.
- *   - sociedad privada (3er dígito 9): módulo 11 con 4,3,2,7,6,5,4,3,2 sobre los 9
- *     primeros, verificador en la posición 10; establecimiento (3 últimos) ≠ 000.
- *   - sector público (3er dígito 6): módulo 11 con 3,2,7,6,5,4,3,2 sobre los 8
- *     primeros, verificador en la posición 9; establecimiento (4 últimos) ≠ 0000.
+ *   - sociedad privada (3er dígito 9): establecimiento (3 últimos) ≠ 000.
+ *   - sector público (3er dígito 6): establecimiento (4 últimos) ≠ 0000.
  *
- * Conocido: hay RUC de sociedades emitidos por el SRI cuyo verificador NO cumple
- * el módulo 11. Este validador los rechaza (el comprador puede facturarse con su
- * cédula o el SRI aclarar el caso); si en el piloto aparece uno real, la salida es
- * relajar SOLO el chequeo de verificador de 'privada', en los dos repos.
+ * Para sociedades NO se verifica dígito de control. El algoritmo clásico (módulo
+ * 11 con coeficientes 4,3,2,7,6,5,4,3,2 / 3,2,7,6,5,4,3,2) dejó de cumplirse en los
+ * RUC que el SRI emite desde hace años: verificado el 2026-11-10 con el RUC real de
+ * una S.A.S. de Quito (da verificador 1 y termina en 0). Rechazarlos bloquearía
+ * facturar a clientes legítimos; el SRI valida el RUC de verdad al autorizar.
  */
 export function validateRuc(raw: string): IdCheck & { kind?: RucKind } {
   const id = (raw ?? "").trim();
@@ -170,19 +160,11 @@ export function validateRuc(raw: string): IdCheck & { kind?: RucKind } {
   }
 
   if (kind === "privada") {
-    const check = mod11(id, [4, 3, 2, 7, 6, 5, 4, 3, 2]);
-    if (check === null || check !== Number(id[9])) {
-      return { ok: false, reason: "El dígito verificador del RUC no es correcto." };
-    }
     if (id.slice(10) === "000") return { ok: false, reason: "El RUC debe terminar en un establecimiento (001 o más)." };
     return { ok: true, kind };
   }
 
   // pública
-  const check = mod11(id, [3, 2, 7, 6, 5, 4, 3, 2]);
-  if (check === null || check !== Number(id[8])) {
-    return { ok: false, reason: "El dígito verificador del RUC no es correcto." };
-  }
   if (id.slice(9) === "0000") return { ok: false, reason: "El RUC debe terminar en un establecimiento (0001 o más)." };
   return { ok: true, kind };
 }

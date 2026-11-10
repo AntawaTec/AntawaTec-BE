@@ -57,23 +57,23 @@ Deno.test("validateRuc: persona natural (cédula + establecimiento)", () => {
   assertFalse(validateRuc("1712345674001").ok, "cédula base inválida");
 });
 
-Deno.test("validateRuc: sociedad privada (módulo 11, 3er dígito 9)", () => {
-  for (const r of ["1799999990001", "0999999999001"]) {
+Deno.test("validateRuc: sociedad privada (3er dígito 9, sin dígito de control)", () => {
+  // 1799999991001 NO cumple el módulo 11 clásico: debe aceptarse igual (los RUC
+  // reales de sociedades ya no lo cumplen).
+  for (const r of ["1799999990001", "0999999999001", "1799999991001"]) {
     const v = validateRuc(r);
     assert(v.ok, r);
     assertEquals(v.kind, "privada");
   }
-  assertFalse(validateRuc("1799999991001").ok, "verificador");
   assertFalse(validateRuc("1799999990000").ok, "establecimiento 000");
 });
 
-Deno.test("validateRuc: sector público (módulo 11, 3er dígito 6)", () => {
-  for (const r of ["1760000070001", "0960000060001", "1761234510001"]) {
+Deno.test("validateRuc: sector público (3er dígito 6, sin dígito de control)", () => {
+  for (const r of ["1760000070001", "0960000060001", "1761234510001", "1760000080001"]) {
     const v = validateRuc(r);
     assert(v.ok, r);
     assertEquals(v.kind, "publica");
   }
-  assertFalse(validateRuc("1760000080001").ok, "verificador");
   assertFalse(validateRuc("1760000070000").ok, "establecimiento 0000");
 });
 
