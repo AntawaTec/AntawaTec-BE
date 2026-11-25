@@ -342,8 +342,9 @@ function toEmailPayload(
 // ---------------------------------------------------------------------------
 async function sweep(
   admin: ReturnType<typeof createAdminClient>,
-): Promise<{ enqueued: number; scanned: number }> {
+): Promise<{ enqueued: number; scanned: number; resendError: string | null }> {
   let enq = 0;
+  let resendError: string | null = null;
   // Filas leídas por el barrido (suma de los 7 bloques): el único observable
   // externo de que la ventana y el paginado hacen lo que dicen.
   let scanned = 0;
@@ -538,7 +539,70 @@ async function sweep(
         }), "email");
     }
   }
-  return { enqueued: enq, scanned };
+  // quote_ready — REENVÍO (0054): cada fila de `quote_sends` es un envío 2..N de una
+  // cotización ya enviada ("le mando la actualizada"). Se encola con su PROPIA clave
+  // de dedupe (related_entity_type 'quote_send' + id del reenvío), así que el par
+  // ('quote', quote_id) del primer envío queda intacto y el índice de 0034 no cambia.
+  // La tabla nace vacía → sin backlog. Ventana por `created_at`: las filas son
+  // append-only, nunca se actualizan. El snapshot se toma ahora, igual que en el
+  // primer envío: el FE guarda la cotización ANTES de insertar el reenvío.
+  //
+  // AISLADO a propósito (único bloque con try/catch): un fallo acá — típicamente la
+  // función deployada antes que la migración 0054 — NO puede tumbar el barrido, porque
+  // el drenado corre después y con él TODOS los avisos del taller. No se traga: queda
+  // en el log y en la respuesta (`resend_error`), y el próximo tick reintenta solo
+  // (el barrido es state-driven, no se pierde ningún reenvío).
+  try {
+    const rows = await selectAll<Row>(() =>
+      admin.from("quote_sends")
+        .select(`id, shop_id, quote_id, quote:quotes!quote_sends_quote_fk(${qtSel})`)
+        .gte("created_at", sinceIso));
+    scanned += rows.length;
+    if (rows.length > 0) {
+      const ids = rows.map((r) => r.id as string);
+      const existing = await existingByChannel(admin, "quote_ready", "quote_send", ids);
+      const missing = rows.filter((r) => !existing.whatsapp.has(r.id as string) || !existing.email.has(r.id as string));
+      const snaps = await loadQuoteSnapshots(admin, missing.map((r) => r.quote_id as string));
+      // La cotización viaja embebida; el FK compuesto + cascade garantizan que existe.
+      const withQuote = rows
+        .map((r) => ({ send: r, q: firstOf(r.quote as Row | Row[]) }))
+        .filter((x): x is { send: Row; q: Row } => x.q !== null);
+
+      const wa = withQuote.filter((x) => !existing.whatsapp.has(x.send.id as string));
+      enq += await enqueueMissing(admin, "quote_ready", "quote_send",
+        wa.map(({ send, q }) => ({
+          id: send.id as string,
+          shop_id: send.shop_id as string,
+          customer_id: q.customer_id as string,
+          payload: quotePayload(q, shopOf(send.shop_id), snaps.get(q.id as string) ?? null),
+        })));
+
+      const mail = withQuote.filter((x) => !existing.email.has(x.send.id as string));
+      enq += await enqueueMissing(admin, "quote_ready", "quote_send",
+        mail.map(({ send, q }) => {
+          const shop = shopOf(send.shop_id);
+          const snap = snaps.get(q.id as string) ?? null;
+          return {
+            id: send.id as string,
+            shop_id: send.shop_id as string,
+            customer_id: q.customer_id as string,
+            // quote_updated: el correo (plantilla nuestra) avisa que es una versión
+            // actualizada. El WhatsApp no puede: su texto es el de la plantilla
+            // aprobada por Meta.
+            payload: {
+              ...toEmailPayload(quotePayload(q, shop, snap), firstOf(q.customer as Row | Row[]), shop, snap),
+              quote_updated: true,
+            },
+          };
+        }), "email");
+    }
+  } catch (e) {
+    resendError = e instanceof Error ? e.message
+      : (e && typeof e === "object") ? JSON.stringify(e)
+      : String(e);
+    console.error("notification-dispatch: barrido de reenvíos (quote_sends) falló:", resendError);
+  }
+  return { enqueued: enq, scanned, resendError };
 }
 
 // ---------------------------------------------------------------------------
@@ -732,14 +796,17 @@ Deno.serve(async (req: Request) => {
 
   try {
     const admin = createAdminClient();
-    const { enqueued, scanned } = await sweep(admin);
+    const { enqueued, scanned, resendError } = await sweep(admin);
     const { sent, failed, held, deferred } = await drain(admin);
     // `held` (esperando el HOLD de 15 min) y `deferred` (fuera del presupuesto de
     // PDFs del tick) salen en la respuesta: sin ellos, un operador que invoca a
     // mano vería "0 enviados" y no sabría si el pipeline está trabado o esperando.
     // `scanned` (filas que leyó el barrido, suma de los 7 bloques) es lo que deja
     // verificar desde afuera que la ventana y el paginado alcanzan lo que deben.
-    return ok({ enqueued, scanned, sent, failed, held, deferred });
+    return ok({
+      enqueued, scanned, sent, failed, held, deferred,
+      ...(resendError ? { resend_error: resendError } : {}),
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message
       : (e && typeof e === "object") ? JSON.stringify(e)

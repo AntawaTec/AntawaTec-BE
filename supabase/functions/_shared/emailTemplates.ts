@@ -60,6 +60,8 @@ export interface EmailPayload extends NotificationPayload {
   logo_url?: string | null;
   address?: string | null;
   quote?: QuoteSnapshot | null;
+  // quote_ready reenviado (0054): el dueño modificó la cotización y manda la nueva.
+  quote_updated?: boolean | null;
 }
 
 export interface RenderedEmail {
@@ -233,13 +235,17 @@ function quoteReady(p: EmailPayload): RenderedEmail {
     ? quoteTables(q)
     : paragraph("El detalle de la cotización está disponible en el taller.");
   return {
-    subject: `Cotización ${num} — ${shopName(p)}`,
+    subject: p.quote_updated
+      ? `Cotización ${num} actualizada — ${shopName(p)}`
+      : `Cotización ${num} — ${shopName(p)}`,
     html: layout(
       p,
       [
         paragraph(`Hola ${esc(customerName(p))},`),
         paragraph(
-          `La cotización <strong>${esc(num)}</strong> para tu vehículo está lista para tu revisión. Te dejamos el detalle a continuación.`,
+          p.quote_updated
+            ? `Actualizamos la cotización <strong>${esc(num)}</strong> de tu vehículo. Esta versión reemplaza a la que te enviamos antes; te dejamos el detalle a continuación.`
+            : `La cotización <strong>${esc(num)}</strong> para tu vehículo está lista para tu revisión. Te dejamos el detalle a continuación.`,
         ),
         vehicleBox(p),
         detalle,
