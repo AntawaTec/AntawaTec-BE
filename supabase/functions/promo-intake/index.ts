@@ -8,12 +8,17 @@
 // es INMEDIATA (provisionTenant con provider 'trial' + magic link).
 //
 // Contrato con la landing (CONGELADO — la landing muestra `error` TAL CUAL):
-//   POST application/json { code, businessName, email, phone, website }
+//   POST application/json { code, businessName, email, phone, website, lid? }
 //     code          req, trim + upper, ^[A-Z0-9]{4,20}$
 //     businessName  req (validateBusinessName de _shared/prospect.ts)
 //     email         req (validateEmail; se normaliza trim + lower)
 //     phone         req, trim, 7–20 chars de [0-9+ ()-]; se guarda tal cual
 //     website       HONEYPOT: si viene lleno es un bot → 201 FALSO sin escribir
+//     lid           OPCIONAL: id del lead de Kommo que trae el link del bot de
+//                   WhatsApp (`?lid=`). Si no es un entero positivo se IGNORA
+//                   (nunca es motivo de 400). Con lid, el taller queda enlazado
+//                   en kommo_leads (0056) y el lead se mueve a "Prueba activa"
+//                   en segundo plano (_shared/kommo.ts).
 //   → 201 { shopId, email, periodEnd }
 //   → 400 { error }  validación / "Este código no es válido o ya venció." /
 //                    "Este código ya alcanzó su límite de usos."
@@ -49,6 +54,8 @@ import {
 import { validateBusinessName, validateEmail } from "../_shared/prospect.ts";
 import { findAuthUserByEmail } from "../_shared/authAdmin.ts";
 import { provisionTenant } from "../_shared/provisionTenant.ts";
+import { parseLeadId, runInBackground, syncLeadStage } from "../_shared/kommo.ts";
+import { PRICE_CENTS } from "../_shared/payphone.ts";
 
 const LABEL = "promo-intake";
 
@@ -71,6 +78,7 @@ interface RequestBody {
   email?: unknown;
   phone?: unknown;
   website?: unknown;
+  lid?: unknown;
 }
 
 interface PromoCodeRow {
@@ -122,6 +130,8 @@ Deno.serve(async (req) => {
 
   const phone = typeof body.phone === "string" ? body.phone.trim() : "";
   if (!PHONE_RE.test(phone)) return badRequest(MSG_PHONE);
+
+  const leadId = parseLeadId(body.lid);
 
   try {
     // 3) El código: existe, activo, no vencido.
@@ -190,6 +200,11 @@ Deno.serve(async (req) => {
         `${LABEL}: no se pudo enlazar el canje ${redemptionId} al shop ` +
           `${result.shopId}: ${linkErr.message}`,
       );
+    }
+
+    if (leadId !== null) {
+      await linkKommoLead(admin, result.shopId, leadId, code);
+      runInBackground(syncLeadStage(admin, result.shopId, "trial", PRICE_CENTS / 100));
     }
 
     const periodEnd = await loadTrialPeriodEnd(admin, result.shopId);
@@ -290,6 +305,30 @@ async function insertRedemption(
     if (existing) return existing;
   }
   throw new Error(`Insert del canje falló: ${error?.message ?? "sin fila"}`);
+}
+
+/**
+ * Enlaza el taller con su lead de Kommo. Best-effort: el taller ya existe, así
+ * que un fallo acá se loguea y no tumba el 201. `ignoreDuplicates` para que un
+ * reintento del alta no pise las fechas de sincronización.
+ */
+async function linkKommoLead(
+  admin: SupabaseClient,
+  shopId: string,
+  leadId: number,
+  code: string,
+): Promise<void> {
+  const { error } = await admin
+    .from("kommo_leads")
+    .upsert(
+      { shop_id: shopId, lead_id: leadId, campaign_code: code },
+      { onConflict: "shop_id", ignoreDuplicates: true },
+    );
+  if (error) {
+    console.error(
+      `${LABEL}: no se pudo enlazar el lead ${leadId} de Kommo al shop ${shopId}: ${error.message}`,
+    );
+  }
 }
 
 async function loadTrialPeriodEnd(
