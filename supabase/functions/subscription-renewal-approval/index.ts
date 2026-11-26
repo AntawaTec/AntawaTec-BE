@@ -43,6 +43,8 @@ import {
   maxDate,
   parseTimestamp,
 } from "../_shared/subscriptionPeriod.ts";
+import { runInBackground, syncLeadStage } from "../_shared/kommo.ts";
+import { PRICE_CENTS } from "../_shared/payphone.ts";
 
 const LABEL = "subscription-renewal-approval";
 const PROVIDER = "bank_transfer" as const;
@@ -201,6 +203,14 @@ Deno.serve(async (req) => {
 
     // 6.e) Espejo en el taller (lo mismo que hace reactivate() en hotmart-webhook).
     await activateShop(admin, shopId);
+
+    // 6.f) Kommo: el PRIMER pago de un taller que llegó por la campaña mueve su
+    //      lead a "Logrado con éxito". Se llama en cada aprobación a propósito:
+    //      solo actúa si el taller tiene lead enlazado y `purchase_synced_at`
+    //      está vacío, así las renovaciones siguientes son no-op y, si Kommo
+    //      falló la primera vez, la siguiente aprobación lo reintenta. En
+    //      segundo plano y sin lanzar: nunca afecta la aprobación.
+    runInBackground(syncLeadStage(admin, shopId, "purchase", PRICE_CENTS / 100));
 
     console.log(
       `${LABEL}: proof ${proofId} APROBADO por admin ${callerId}. ` +
