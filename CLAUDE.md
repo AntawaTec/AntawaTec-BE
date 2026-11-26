@@ -31,7 +31,7 @@ migración directa. Base de datos **Postgres**. Desarrollo solo, asistido por IA
 ## Estructura de carpetas
 ```
 supabase/
-  migrations/       # 0001_foundation.sql ... 0054_*.sql. NUNCA editar una aplicada.
+  migrations/       # 0001_foundation.sql ... 0055_*.sql. NUNCA editar una aplicada.
   functions/        # Edge Functions (una carpeta por función con index.ts)
     _shared/        # Código compartido entre funciones
   config.toml
@@ -40,6 +40,8 @@ scripts/            # Tooling de desarrollo (NO lo corre el CLI)
   seed.sql                 # datos demo (requiere pegar 3 UIDs de auth)
   test_isolation.sql       # pruebas de aislamiento RLS (bloques 5–7 de facturación: auto-verificables)
   test_quote_numbering.sql # valida el correlativo por taller de quotes (0012)
+  test_time_logs.sql       # constraints/RPC del timer de técnicos (0027)
+  test_work_order_void.sql # anular/reactivar órdenes (0055): stock, guardias, factura, avisos; auto-verificable
   backfill_vehicle_mileage.sql # backfill único de vehicles.mileage desde el km de las órdenes (import Zoho); dry-run por defecto
 docs/               # runbooks operativos (setup de WhatsApp/email, ventana de deploy)
 CLAUDE.md           # este archivo (raíz del repo)
@@ -105,6 +107,12 @@ Decisiones de modelado clave:
   Function `technician-access` (service_role); revocar = `deleteUser` → cascada borra
   el profile y el FK deja `profile_id` NULL (el historial queda, referencia `technicians.id`).
 - `work_order_deliveries` 1:1 con la orden (cierre).
+- **Orden anulada** (`0055`): `work_orders.voided_at/voided_by/void_reason`, ortogonal al
+  `status` (que no se toca). Solo se anula/reactiva por las RPC `void_work_order(p_id,
+  p_reason)` / `reactivate_work_order(p_id)` (dueño; devuelven/re-descuentan stock con
+  `adjustment`, cancelan avisos pendientes, bitácora). Un trigger congela la orden anulada y
+  sus consumos/sesiones de tiempo. Todo lo que lista o suma órdenes (reportes, kanban,
+  barridos) debe filtrar `voided_at is null`.
 - `quote_items` apunta a `product_id` **o** `service_id` (nunca ambos).
 - Roles: `antawa_admin` (sin shop), `shop_owner` (un shop) y `technician` (miembro de un
   shop; `0020`–`0022`: deny-by-default — `current_shop_id()` → NULL — más grants aditivos
@@ -486,6 +494,21 @@ con el cron pausado y ANTES del deploy de la función.
   para el dedupe, **ampliar lo que un barrido ve es lo mismo que estrenar un par** —
   arreglar un bug de lectura también es un blast si no se siembra primero.
 
+- `[2026-11]` **Anular / reactivar una orden** (`0055`). Pedido real: un taller duplicó una
+  orden y no podía quitarla. Se anula, no se borra. (a) Columnas `voided_*` y NO un valor de
+  `work_order_status`: el status es el carril del kanban, lo leen el barrido y los reportes,
+  y reactivar tiene que devolver la orden a SU carril. (b) El stock vuelve con movimientos
+  `adjustment` atados a la orden (−neto por producto) y la reactivación re-descuenta con
+  `objetivo (Σ consumption) − actual (Σ todo)`: converge en cualquier ciclo y no parsea notas.
+  (c) Avisos pendientes → `failed` con `attempts ≥ 5` (no hay estado `cancelled` y la fila
+  conserva su clave de dedupe); NO se reviven al reactivar (un aviso tardío es peor que
+  ninguno). (d) Guardia por trigger + GUC transaccional `antawa.work_order_void` que solo
+  encienden las RPC; la única escritura permitida sobre una anulada es una cascada `ON DELETE
+  SET NULL` (si no, borrar el login de un técnico se trabaría). (e) Errores de negocio con
+  `PT409`/`PT404` y no 55000/P0002: PostgREST loguea los 5xx y, con un mensaje no-ASCII,
+  responde texto plano "Something went wrong" sin `code` ni `hint` (verificado en local).
+  Deploy: `db push` → `functions deploy notification-dispatch invoice-emit`.
+
 ## Qué evitar
 - No editar migraciones ya aplicadas.
 - No desactivar RLS "para que funcione rápido".
@@ -509,6 +532,10 @@ con el cron pausado y ANTES del deploy de la función.
   crecen: `max_rows = 1000` corta en silencio y el código sigue con datos parciales.
 - No ampliar lo que un barrido ve (ventana, filtro, paginado) sin sembrar primero las
   filas terminales de lo que pasaría a ver: el primer tick lo manda todo, en vivo.
+- No escribir `voided_*` de `work_orders` fuera de `void_work_order` / `reactivate_work_order`
+  (el trigger lo rechaza), ni borrar consumos para "devolver" stock de una orden anulada.
+- No lanzar errores de negocio con SQLSTATE que PostgREST mapea a 5xx (55000, P0002…) si el
+  mensaje lleva tildes: usá `PTxxx` (status HTTP explícito) o un código 4xx.
 
 ## Fuera de alcance V1
 Driver PWA, CarSOS, mecánicos móviles, botón de pánico, chatbot bidireccional de

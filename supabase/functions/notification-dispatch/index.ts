@@ -29,6 +29,12 @@
 //     todo el pipeline y el cron corre cada minuto; lo que sobra espera al próximo
 //     tick en vez de arriesgar el timeout de la función.
 //
+// Órdenes ANULADAS (0055, `voided_at`): los 4 barridos de work_orders las saltean
+// y el drenado relee la orden antes de mandar cada fila de work_order (cubre la
+// carrera con un anulado en vuelo). Lo pendiente al anular ya lo cancela la RPC
+// en su transacción. Filtrar es ACHICAR lo que el barrido ve: no necesita backfill.
+// Requiere la 0055 aplicada (`db push` antes de deployar esta función).
+//
 // Decidido vía debate dual-Opus. service_role (createAdminClient) → puede escribir
 // notification_log (que no tiene insert policy para authenticated).
 // =============================================================================
@@ -363,7 +369,7 @@ async function sweep(
   // con el detalle de los trabajos acordados cuando la orden nace de una cotización.
   {
     const rows = await selectAll<Row>(() =>
-      admin.from("work_orders").select(woSel).gte("updated_at", sinceIso));
+      admin.from("work_orders").select(woSel).is("voided_at", null).gte("updated_at", sinceIso));
     scanned += rows.length;
     enq += await enqueueMissing(admin, "vehicle_received", "work_order",
       rows.map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
@@ -389,7 +395,7 @@ async function sweep(
   // vehicle_ready: orden que alcanzó (o pasó) 'delivery'.
   {
     const rows = await selectAll<Row>(() =>
-      admin.from("work_orders").select(woSel).in("status", ["delivery", "historical"]).gte("updated_at", sinceIso));
+      admin.from("work_orders").select(woSel).in("status", ["delivery", "historical"]).is("voided_at", null).gte("updated_at", sinceIso));
     scanned += rows.length;
     enq += await enqueueMissing(admin, "vehicle_ready", "work_order",
       rows.map((w) => ({ id: w.id as string, shop_id: w.shop_id as string, customer_id: w.customer_id as string, payload: woPayload(w, shopOf(w.shop_id)) })));
@@ -402,7 +408,7 @@ async function sweep(
   // (El histórico anterior al lanzamiento lo neutraliza el backfill de 0041.)
   {
     const rows = await selectAll<Row>(() =>
-      admin.from("work_orders").select(woSel).eq("status", "in_process").gte("updated_at", sinceIso));
+      admin.from("work_orders").select(woSel).eq("status", "in_process").is("voided_at", null).gte("updated_at", sinceIso));
     scanned += rows.length;
     if (rows.length > 0) {
       const existing = await existingByChannel(admin, "work_in_process", "work_order", rows.map((w) => w.id as string));
@@ -429,6 +435,7 @@ async function sweep(
       admin.from("work_orders")
         .select(`${woSel}, delivery:work_order_deliveries(services_summary)`)
         .eq("status", "historical")
+        .is("voided_at", null)
         .gte("updated_at", sinceIso));
     scanned += rows.length;
     enq += await enqueueMissing(admin, "delivery_completed", "work_order",
@@ -608,9 +615,30 @@ async function sweep(
 // ---------------------------------------------------------------------------
 // Drenado
 // ---------------------------------------------------------------------------
+// Mismo texto que void_work_order (0055) para que las dos cancelaciones se lean igual.
+const VOIDED_ERROR = "cancelada: la orden fue anulada";
+
+// ¿La orden quedó anulada? "error" = no se pudo saber (la fila se difiere).
+async function orderVoided(
+  admin: ReturnType<typeof createAdminClient>,
+  workOrderId: string,
+): Promise<"voided" | "active" | "error"> {
+  const { data, error } = await admin
+    .from("work_orders")
+    .select("voided_at")
+    .eq("id", workOrderId)
+    .maybeSingle();
+  if (error) {
+    console.error(`notification-dispatch: no pude verificar si la orden ${workOrderId} está anulada: ${error.message}`);
+    return "error";
+  }
+  // Orden borrada: no hay anulación que respetar; el drenado sigue como siempre.
+  return data?.voided_at ? "voided" : "active";
+}
+
 async function drain(
   admin: ReturnType<typeof createAdminClient>,
-): Promise<{ sent: number; failed: number; held: number; deferred: number }> {
+): Promise<{ sent: number; failed: number; held: number; deferred: number; cancelled: number }> {
   const { data, error } = await admin
     .from("notification_log")
     // created_at es parte del HOLD (no solo del orden) y shop_id /
@@ -623,7 +651,7 @@ async function drain(
     .limit(DRAIN_LIMIT);
   if (error) throw error;
 
-  let sent = 0, failed = 0, held = 0, deferred = 0;
+  let sent = 0, failed = 0, held = 0, deferred = 0, cancelled = 0;
   // Presupuesto de PDFs y caches de la CORRIDA (el catálogo son ~250 filas
   // globales; el logo, un GET por taller en vez de uno por correo).
   let pdfBudget = PDF_PER_TICK;
@@ -642,6 +670,30 @@ async function drain(
       const born = Date.parse((row.created_at as string) ?? "");
       if (Number.isFinite(born) && Date.now() - born < VEHICLE_RECEIVED_EMAIL_HOLD_MS) {
         held++;
+        continue;
+      }
+    }
+
+    // Orden ANULADA (0055) entre el encolado y este envío. void_work_order ya
+    // cancela lo pendiente en su transacción; esto cierra la carrera con un
+    // drenado en vuelo (la fila se leyó 'queued' justo antes del anulado). Se
+    // relee POR FILA y no por lote: entre la primera y la última fila del tick
+    // pasan los envíos de las anteriores (segundos). Si la consulta falla, la
+    // fila espera al próximo tick — nunca se manda sin saber.
+    if (row.related_entity_type === "work_order") {
+      const check = await orderVoided(admin, row.related_entity_id as string);
+      if (check === "error") {
+        deferred++;
+        continue;
+      }
+      if (check === "voided") {
+        await admin.from("notification_log").update({
+          status: "failed",
+          attempts: Math.max(row.attempts as number, MAX_ATTEMPTS),
+          error: VOIDED_ERROR,
+          payload: { ...((row.payload ?? {}) as Record<string, unknown>), cancelled: "work_order_voided" },
+        }).eq("id", row.id as string);
+        cancelled++;
         continue;
       }
     }
@@ -781,7 +833,7 @@ async function drain(
       failed++;
     }
   }
-  return { sent, failed, held, deferred };
+  return { sent, failed, held, deferred, cancelled };
 }
 
 Deno.serve(async (req: Request) => {
@@ -797,7 +849,7 @@ Deno.serve(async (req: Request) => {
   try {
     const admin = createAdminClient();
     const { enqueued, scanned, resendError } = await sweep(admin);
-    const { sent, failed, held, deferred } = await drain(admin);
+    const { sent, failed, held, deferred, cancelled } = await drain(admin);
     // `held` (esperando el HOLD de 15 min) y `deferred` (fuera del presupuesto de
     // PDFs del tick) salen en la respuesta: sin ellos, un operador que invoca a
     // mano vería "0 enviados" y no sabría si el pipeline está trabado o esperando.
@@ -805,6 +857,8 @@ Deno.serve(async (req: Request) => {
     // verificar desde afuera que la ventana y el paginado alcanzan lo que deben.
     return ok({
       enqueued, scanned, sent, failed, held, deferred,
+      // `cancelled`: filas de órdenes anuladas (0055) que el drenado frenó.
+      ...(cancelled ? { cancelled } : {}),
       ...(resendError ? { resend_error: resendError } : {}),
     });
   } catch (e) {

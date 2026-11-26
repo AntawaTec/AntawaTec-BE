@@ -18,7 +18,8 @@
 //   2. Factura filtrada por el shop_id del PERFIL (404 uniforme si es de otro).
 //   3. Pre-validación barata (400 sin tocar el estado).
 //   4. Lock atómico acquire_invoice_for_emission: draft|failed → processing. Un
-//      doble clic recibe 409.
+//      doble clic recibe 409. Con el lock tomado se mira si la orden enlazada
+//      está ANULADA (0055): si lo está, se libera el lock y 409.
 //   5. Se fijan fecha (hoy, Ecuador), ambiente y serie; se RELEEN factura e ítems
 //      (lo que quedó congelado por el lock) y se recalculan los totales en
 //      servidor. Si no cuadran: el lock vuelve al estado anterior y 400.
@@ -176,6 +177,26 @@ async function emit(admin: SupabaseClient, shopId: string, invoice: InvoiceRow):
   }
   const previous = lock.previous_status as "draft" | "failed";
 
+  // 4b) Orden anulada (0055). Se mira DESPUÉS del lock a propósito: void_work_order
+  // bloquea las facturas de la orden `for update`, así que si el anulado ganó la
+  // carrera, esta lectura ya lo ve committeado; si ganó el lock, el anulado ve la
+  // factura en 'processing' y se rechaza. Un chequeo antes del lock no cerraría
+  // la carrera (solo ahorraría el ida y vuelta), por eso no lo hay.
+  // La orden se lee de la factura RELEÍDA: con el lock tomado ya no cambia.
+  let voided: boolean;
+  try {
+    const locked = await loadInvoice(admin, invoice.id, shopId);
+    voided = await workOrderVoided(admin, (locked?.work_order_id as string | null) ?? null, shopId);
+  } catch (e) {
+    await releaseLock(admin, invoice.id, previous);
+    throw e;
+  }
+  if (voided) {
+    await releaseLock(admin, invoice.id, previous);
+    const fresh = await loadInvoice(admin, invoice.id, shopId);
+    return conflict("La orden de esta factura está anulada. Reactívala para poder facturarla.", fresh);
+  }
+
   // 5) Congelar fecha, ambiente y serie de ESTA emisión.
   const { error: stampErr } = await admin
     .from("invoices")
@@ -220,6 +241,19 @@ async function emit(admin: SupabaseClient, shopId: string, invoice: InvoiceRow):
     outcome: outcome.result.outcome,
     message: outcome.result.message ?? outcome.result.notice ?? null,
   });
+}
+
+/** ¿La orden enlazada a la factura está anulada (0055)? Sin orden → false. */
+async function workOrderVoided(admin: SupabaseClient, workOrderId: string | null, shopId: string): Promise<boolean> {
+  if (!workOrderId) return false;
+  const { data, error } = await admin
+    .from("work_orders")
+    .select("voided_at")
+    .eq("id", workOrderId)
+    .eq("shop_id", shopId)
+    .maybeSingle();
+  if (error) throw new Error(`Lectura de la orden ${workOrderId} falló: ${error.message}`);
+  return Boolean(data?.voided_at);
 }
 
 /** Devuelve el lock al estado previo (solo si sigue siendo nuestro 'processing'). */
