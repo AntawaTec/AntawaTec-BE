@@ -85,3 +85,19 @@ Deno.test("fallbacks: sin nombre de taller ni de cliente el correo sigue siendo 
   assertEquals(mail.subject, "Tu vehículo está en proceso — Tu taller de confianza");
   assertStringIncludes(mail.html, "Hola cliente,");
 });
+
+Deno.test("quote_ready: el primer envío anuncia la cotización lista", () => {
+  const mail = renderEmail("quote_ready", payload({ quote: { quote_number: 2, subtotal: 20, tax: 3, total: 23, sections: [] } }))!;
+  assertEquals(mail.subject.includes("actualizada"), false);
+  assertStringIncludes(mail.html, "está lista para tu revisión");
+});
+
+Deno.test("quote_ready reenviado (0054): asunto y cuerpo dicen que es la versión actualizada", () => {
+  const mail = renderEmail(
+    "quote_ready",
+    payload({ quote_updated: true, quote: { quote_number: 2, subtotal: 20, tax: 3, total: 23, sections: [] } }),
+  )!;
+  assertStringIncludes(mail.subject, "actualizada — Taller Pablo");
+  assertStringIncludes(mail.html, "Esta versión reemplaza a la que te enviamos antes");
+  assertEquals(mail.html.includes("está lista para tu revisión"), false);
+});

@@ -31,7 +31,7 @@ migración directa. Base de datos **Postgres**. Desarrollo solo, asistido por IA
 ## Estructura de carpetas
 ```
 supabase/
-  migrations/       # 0001_foundation.sql ... 0053_*.sql. NUNCA editar una aplicada.
+  migrations/       # 0001_foundation.sql ... 0054_*.sql. NUNCA editar una aplicada.
   functions/        # Edge Functions (una carpeta por función con index.ts)
     _shared/        # Código compartido entre funciones
   config.toml
@@ -200,6 +200,13 @@ trabajo en PDF adjunta**), `work_in_process` (aviso corto, sin adjunto) y
 `delivery_completed` (**recibo de entrega en PDF adjunto**). Las dos de citas y
 `vehicle_ready` siguen whatsapp-only. Cada evento encola **una fila por canal** y
 el dedupe es `(entidad, plantilla, canal)` (0034).
+
+**Reenvío de cotización** (`0054`, tabla `quote_sends`): `quote_ready` sale una vez por
+`quotes.sent_at` (entidad `quote`) y una vez más por cada fila de `quote_sends` (entidad
+`quote_send`, id del reenvío) — el índice de dedupe no cambia. La tabla es append-only para
+el dueño (sin políticas de update/delete). El correo del reenvío lleva `quote_updated` y dice
+"actualizada"; el WhatsApp usa la misma plantilla aprobada. El bloque de reenvíos del barrido
+es el único aislado con try/catch (reporta `resend_error`) para no frenar el drenado.
 
 **Correos con PDF** (`_shared/orderPdf.ts` + `_shared/orderSnapshot.ts`, `npm:pdf-lib`).
 Cuatro reglas que no son negociables:
